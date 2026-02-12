@@ -1,15 +1,78 @@
-//! Long-Term Memory — SQLite + keyword search for persistent data
+//! Long-Term Memory — SQLite + hybrid keyword/vector search
 //!
 //! Stores procedures, incidents, config changes.
-//! Provides keyword-based search (vector embeddings in future with ChromaDB).
+//! Provides hybrid search combining keyword matching and vector similarity.
 
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::proto::memory::*;
 
-/// Long-term memory with SQLite storage
+/// Generate a simple bag-of-words embedding vector
+fn generate_embedding(text: &str) -> Vec<f32> {
+    let words: Vec<String> = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    let dim = 64;
+    let mut vec = vec![0.0f32; dim];
+    if words.is_empty() {
+        return vec;
+    }
+
+    let mut word_counts: HashMap<String, usize> = HashMap::new();
+    for word in &words {
+        *word_counts.entry(word.clone()).or_insert(0) += 1;
+    }
+
+    for (word, count) in &word_counts {
+        let hash = word.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let idx = (hash % dim as u64) as usize;
+        vec[idx] += *count as f32;
+        let idx2 = ((hash >> 16) % dim as u64) as usize;
+        vec[idx2] += (*count as f32) * 0.5;
+    }
+
+    let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut vec {
+            *v /= norm;
+        }
+    }
+    vec
+}
+
+/// Cosine similarity between two vectors
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)) as f64
+}
+
+fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
+}
+
+fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Long-term memory with SQLite storage and vector embeddings
 pub struct LongTermMemory {
     conn: Mutex<Connection>,
 }
@@ -33,6 +96,7 @@ impl LongTermMemory {
                 fail_count INTEGER NOT NULL DEFAULT 0,
                 avg_duration_ms INTEGER NOT NULL DEFAULT 0,
                 tags TEXT,
+                embedding BLOB,
                 created_at INTEGER NOT NULL,
                 last_used INTEGER
             );
@@ -67,7 +131,7 @@ impl LongTermMemory {
         })
     }
 
-    /// Keyword-based semantic search across collections
+    /// Hybrid keyword + vector search across collections
     pub fn semantic_search(
         &self,
         query: &str,
@@ -79,6 +143,7 @@ impl LongTermMemory {
         let mut results = Vec::new();
         let limit = if n_results <= 0 { 10 } else { n_results };
         let keywords: Vec<&str> = query.split_whitespace().collect();
+        let query_embedding = generate_embedding(query);
 
         let collections_to_search = if collections.is_empty() {
             vec![
@@ -94,19 +159,26 @@ impl LongTermMemory {
             match collection.as_str() {
                 "procedures" | "decisions" => {
                     let mut stmt = conn.prepare(
-                        "SELECT id, name, description FROM procedures ORDER BY last_used DESC LIMIT ?1",
+                        "SELECT id, name, description, embedding FROM procedures ORDER BY last_used DESC LIMIT ?1",
                     )?;
                     let rows = stmt.query_map(params![limit], |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
+                            row.get::<_, Option<Vec<u8>>>(3)?,
                         ))
                     })?;
                     for row in rows {
-                        let (id, name, description) = row?;
+                        let (id, name, description, embedding_bytes) = row?;
                         let content = format!("{name}: {description}");
-                        let relevance = keyword_relevance(&keywords, &content);
+                        let kw_score = keyword_relevance(&keywords, &content);
+                        let vec_score = if let Some(ref bytes) = embedding_bytes {
+                            cosine_similarity(&query_embedding, &bytes_to_embedding(bytes))
+                        } else {
+                            0.0
+                        };
+                        let relevance = kw_score * 0.4 + vec_score * 0.6;
                         if relevance >= min_relevance {
                             results.push(SearchResult {
                                 id,
@@ -185,9 +257,15 @@ impl LongTermMemory {
     pub fn store_procedure(&self, procedure: &Procedure) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let tags = procedure.tags.join(",");
+
+        // Generate embedding from name + description + tags
+        let full_text = format!("{} {} {}", procedure.name, procedure.description, tags);
+        let embedding = generate_embedding(&full_text);
+        let embedding_bytes = embedding_to_bytes(&embedding);
+
         conn.execute(
-            "INSERT OR REPLACE INTO procedures (id, name, description, steps_json, success_count, fail_count, avg_duration_ms, tags, created_at, last_used)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT OR REPLACE INTO procedures (id, name, description, steps_json, success_count, fail_count, avg_duration_ms, tags, embedding, created_at, last_used)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 procedure.id,
                 procedure.name,
@@ -197,6 +275,7 @@ impl LongTermMemory {
                 procedure.fail_count,
                 procedure.avg_duration_ms,
                 tags,
+                embedding_bytes,
                 procedure.created_at,
                 procedure.last_used,
             ],

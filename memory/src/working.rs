@@ -340,6 +340,71 @@ impl WorkingMemory {
         Ok(())
     }
 
+    // --- Pattern Learning ---
+
+    /// Extract and store a pattern from a successful task completion
+    /// Called after a goal is completed successfully to learn from the outcome
+    pub fn learn_pattern_from_goal(
+        &self,
+        goal_description: &str,
+        tool_sequence: &[String],
+        goal_id: &str,
+    ) -> Result<()> {
+        if tool_sequence.is_empty() {
+            return Ok(());
+        }
+
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let pattern_id = uuid::Uuid::new_v4().to_string();
+        let action = tool_sequence.join(" → ");
+        let now = chrono::Utc::now().timestamp();
+
+        // Check if a similar pattern already exists
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM patterns WHERE trigger LIKE ?1 AND action = ?2 LIMIT 1",
+                params![format!("%{}%", &goal_description[..goal_description.len().min(50)]), &action],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(existing_id) = existing {
+            // Update existing pattern's success stats
+            conn.execute(
+                "UPDATE patterns SET uses = uses + 1, last_used = ?1,
+                 success_rate = (success_rate * uses + 1.0) / (uses + 1)
+                 WHERE id = ?2",
+                params![now, existing_id],
+            )?;
+        } else {
+            // Insert new pattern
+            conn.execute(
+                "INSERT INTO patterns (id, trigger, action, success_rate, uses, last_used, created_from)
+                 VALUES (?1, ?2, ?3, 1.0, 1, ?4, ?5)",
+                params![pattern_id, goal_description, action, now, goal_id],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Get tool sequence used for a completed goal
+    pub fn get_tool_sequence_for_goal(&self, goal_id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT tool_name FROM tool_calls
+             WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?1)
+             ORDER BY timestamp ASC",
+        )?;
+
+        let tools: Vec<String> = stmt
+            .query_map(params![goal_id], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(tools)
+    }
+
     // --- Agent State ---
 
     pub fn store_agent_state(&self, state: &AgentState) -> Result<()> {

@@ -61,12 +61,37 @@ struct OpenAiUsage {
 
 impl OpenAiClient {
     pub fn new(api_key: String) -> Self {
+        let base_url = std::env::var("OPENAI_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        let model = std::env::var("OPENAI_MODEL")
+            .unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
-            client: reqwest::Client::new(),
-            base_url: "https://api.openai.com".to_string(),
-            model: "gpt-4o".to_string(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            base_url,
+            model,
         }
+    }
+
+    /// Create a client with explicit config (for multiple OpenAI-compatible providers)
+    pub fn with_config(api_key: String, base_url: String, model: String) -> Self {
+        Self {
+            api_key,
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+            base_url,
+            model,
+        }
+    }
+
+    /// Get the model name this client is configured for
+    pub fn model_name(&self) -> &str {
+        &self.model
     }
 
     pub fn is_available(&self) -> bool {

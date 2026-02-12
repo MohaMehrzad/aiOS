@@ -8,8 +8,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 mod goal_engine;
 mod task_planner;
@@ -17,6 +18,14 @@ mod agent_router;
 mod result_aggregator;
 mod decision_logger;
 mod management;
+mod health;
+mod clients;
+mod autonomy;
+mod context;
+mod agent_spawner;
+mod tls;
+mod discovery;
+mod proactive;
 
 pub mod proto {
     pub mod common {
@@ -52,6 +61,9 @@ pub struct OrchestratorState {
     pub result_aggregator: result_aggregator::ResultAggregator,
     pub decision_logger: decision_logger::DecisionLogger,
     pub started_at: Instant,
+    pub cancel_token: CancellationToken,
+    pub clients: clients::ServiceClients,
+    pub health_checker: Arc<RwLock<health::HealthChecker>>,
 }
 
 /// Read CPU usage from /proc/stat (Linux) or return 0.0 on other platforms
@@ -130,11 +142,29 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         info!("Received goal: {}", req.description);
 
         let mut state = self.state.write().await;
+
+        // Decompose goal into tasks
         let goal_id = state
             .goal_engine
-            .submit_goal(req.description, req.priority, req.source)
+            .submit_goal(req.description.clone(), req.priority, req.source)
             .await
             .map_err(|e| tonic::Status::internal(format!("Failed to submit goal: {e}")))?;
+
+        // Decompose into tasks using the task planner
+        match state
+            .task_planner
+            .decompose_goal(&goal_id, &req.description)
+            .await
+        {
+            Ok(tasks) => {
+                let task_count = tasks.len();
+                state.goal_engine.add_tasks(&goal_id, tasks);
+                info!("Goal {goal_id} decomposed into {task_count} tasks");
+            }
+            Err(e) => {
+                warn!("Failed to decompose goal {goal_id}: {e}");
+            }
+        }
 
         Ok(tonic::Response::new(proto::common::GoalId { id: goal_id }))
     }
@@ -269,8 +299,6 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         let (mem_used, mem_total) = read_memory_mb();
 
         // Collect registered agent capabilities as a proxy for "loaded models"
-        // The runtime service manages actual model loading; here we report
-        // the intelligence levels available based on registered agents.
         let agents = state.agent_router.list_agents().await;
         let mut models: Vec<String> = agents
             .iter()
@@ -306,6 +334,16 @@ async fn main() -> Result<()> {
 
     info!("aiOS Orchestrator starting...");
 
+    // Create cancellation token for graceful shutdown
+    let cancel_token = CancellationToken::new();
+
+    // Initialize health checker
+    let health_checker = Arc::new(RwLock::new(health::HealthChecker::new()));
+
+    // Initialize service discovery
+    let service_registry = Arc::new(RwLock::new(discovery::ServiceRegistry::new()));
+    service_registry.write().await.register_defaults();
+
     // Initialize state
     let state = Arc::new(RwLock::new(OrchestratorState {
         goal_engine: goal_engine::GoalEngine::new(),
@@ -314,6 +352,9 @@ async fn main() -> Result<()> {
         result_aggregator: result_aggregator::ResultAggregator::new(),
         decision_logger: decision_logger::DecisionLogger::new(),
         started_at: Instant::now(),
+        cancel_token: cancel_token.clone(),
+        clients: clients::ServiceClients::new(),
+        health_checker: health_checker.clone(),
     }));
 
     let service = OrchestratorService {
@@ -322,10 +363,85 @@ async fn main() -> Result<()> {
 
     // Start management console (HTTP) in background
     let mgmt_state = state.clone();
+    let mgmt_health = health_checker.clone();
     tokio::spawn(async move {
-        if let Err(e) = management::start_management_server(mgmt_state).await {
+        if let Err(e) = management::start_management_server(mgmt_state, mgmt_health).await {
             error!("Management server failed: {e}");
         }
+    });
+
+    // Start health checker background loop
+    let health_cancel = cancel_token.clone();
+    let health_checker_clone = health_checker.clone();
+    tokio::spawn(async move {
+        health::HealthChecker::run(health_checker_clone, health_cancel).await;
+    });
+
+    // Start autonomy loop
+    let autonomy_state = state.clone();
+    let autonomy_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        autonomy::run_autonomy_loop(
+            autonomy_state,
+            autonomy_cancel,
+            autonomy::AutonomyConfig::default(),
+        )
+        .await;
+    });
+
+    // Start proactive goal generator
+    let proactive_state = state.clone();
+    let proactive_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        proactive::run_proactive_loop(
+            proactive_state,
+            proactive_cancel,
+            proactive::ProactiveConfig::default(),
+        )
+        .await;
+    });
+
+    // Start service discovery background loop
+    let discovery_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        discovery::ServiceRegistry::run(service_registry, discovery_cancel).await;
+    });
+
+    // Set up signal handlers for graceful shutdown
+    let shutdown_token = cancel_token.clone();
+    tokio::spawn(async move {
+        #[cfg(unix)]
+        {
+            let ctrl_c = tokio::signal::ctrl_c();
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to install SIGTERM handler");
+
+            tokio::select! {
+                _ = ctrl_c => {
+                    info!("Received SIGINT, initiating graceful shutdown...");
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, initiating graceful shutdown...");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+            info!("Received SIGINT, initiating graceful shutdown...");
+        }
+
+        // Signal all background tasks to stop
+        shutdown_token.cancel();
+
+        // Give background tasks time to drain
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+        info!("Graceful shutdown complete");
     });
 
     // Start gRPC server
@@ -334,7 +450,7 @@ async fn main() -> Result<()> {
 
     Server::builder()
         .add_service(OrchestratorServer::new(service))
-        .serve(addr)
+        .serve_with_shutdown(addr, cancel_token.cancelled_owned())
         .await
         .context("gRPC server failed")?;
 

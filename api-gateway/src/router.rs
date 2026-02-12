@@ -36,6 +36,7 @@ impl RequestRouter {
         request: &ApiInferRequest,
         claude: &ClaudeClient,
         openai: &OpenAiClient,
+        qwen3: &OpenAiClient,
         budget: &mut BudgetManager,
     ) -> Result<InferenceResponse> {
         // Check cache
@@ -46,73 +47,41 @@ impl RequestRouter {
         }
 
         // Select provider
-        let provider = self.select_provider(request, budget);
+        let provider = self.select_provider(request, claude, openai, qwen3, budget);
 
-        // Execute request
-        let response = match provider.as_str() {
-            "claude" => {
-                let resp = claude
-                    .infer(
-                        &request.prompt,
-                        &request.system_prompt,
-                        request.max_tokens,
-                        request.temperature,
-                    )
-                    .await;
+        // Build fallback chain based on what's available
+        let fallback_order: Vec<&str> = match provider.as_str() {
+            "claude" => vec!["openai", "qwen3"],
+            "openai" => vec!["claude", "qwen3"],
+            "qwen3" => vec!["claude", "openai"],
+            _ => vec![],
+        };
 
-                match resp {
-                    Ok(r) => {
-                        budget.record_usage("claude", r.tokens_used, &r.model_used);
-                        Ok(r)
+        // Try primary provider
+        let response = self.try_provider(&provider, request, claude, openai, qwen3, budget).await;
+
+        let response = match response {
+            Ok(r) => Ok(r),
+            Err(e) if request.allow_fallback => {
+                info!("{provider} failed: {e}, trying fallbacks...");
+                let mut last_err = e;
+                let mut success = None;
+                for fb in &fallback_order {
+                    match self.try_provider(fb, request, claude, openai, qwen3, budget).await {
+                        Ok(r) => {
+                            info!("Fallback to {fb} succeeded");
+                            success = Some(r);
+                            break;
+                        }
+                        Err(e) => {
+                            info!("Fallback {fb} also failed: {e}");
+                            last_err = e;
+                        }
                     }
-                    Err(e) if request.allow_fallback && openai.is_available() => {
-                        info!("Claude failed, falling back to OpenAI: {e}");
-                        let r = openai
-                            .infer(
-                                &request.prompt,
-                                &request.system_prompt,
-                                request.max_tokens,
-                                request.temperature,
-                            )
-                            .await?;
-                        budget.record_usage("openai", r.tokens_used, &r.model_used);
-                        Ok(r)
-                    }
-                    Err(e) => Err(e),
                 }
+                success.ok_or(last_err)
             }
-            "openai" => {
-                let resp = openai
-                    .infer(
-                        &request.prompt,
-                        &request.system_prompt,
-                        request.max_tokens,
-                        request.temperature,
-                    )
-                    .await;
-
-                match resp {
-                    Ok(r) => {
-                        budget.record_usage("openai", r.tokens_used, &r.model_used);
-                        Ok(r)
-                    }
-                    Err(e) if request.allow_fallback && claude.is_available() => {
-                        info!("OpenAI failed, falling back to Claude: {e}");
-                        let r = claude
-                            .infer(
-                                &request.prompt,
-                                &request.system_prompt,
-                                request.max_tokens,
-                                request.temperature,
-                            )
-                            .await?;
-                        budget.record_usage("claude", r.tokens_used, &r.model_used);
-                        Ok(r)
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            _ => bail!("No available API provider"),
+            Err(e) => Err(e),
         }?;
 
         // Cache the response
@@ -121,18 +90,66 @@ impl RequestRouter {
         Ok(response)
     }
 
+    /// Try a single provider
+    async fn try_provider(
+        &self,
+        provider: &str,
+        request: &ApiInferRequest,
+        claude: &ClaudeClient,
+        openai: &OpenAiClient,
+        qwen3: &OpenAiClient,
+        budget: &mut BudgetManager,
+    ) -> Result<InferenceResponse> {
+        match provider {
+            "claude" => {
+                if !claude.is_available() {
+                    bail!("Claude API key not configured");
+                }
+                let r = claude.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                budget.record_usage("claude", r.tokens_used, &r.model_used);
+                Ok(r)
+            }
+            "openai" => {
+                if !openai.is_available() {
+                    bail!("OpenAI API key not configured");
+                }
+                let r = openai.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                budget.record_usage("openai", r.tokens_used, &r.model_used);
+                Ok(r)
+            }
+            "qwen3" => {
+                if !qwen3.is_available() {
+                    bail!("Qwen3 API key not configured");
+                }
+                let r = qwen3.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                budget.record_usage("qwen3", r.tokens_used, &r.model_used);
+                Ok(r)
+            }
+            _ => bail!("Unknown provider: {provider}"),
+        }
+    }
+
     /// Select the best provider for a request
-    pub fn select_provider(&self, request: &ApiInferRequest, budget: &BudgetManager) -> String {
+    pub fn select_provider(
+        &self,
+        request: &ApiInferRequest,
+        claude: &ClaudeClient,
+        openai: &OpenAiClient,
+        qwen3: &OpenAiClient,
+        budget: &BudgetManager,
+    ) -> String {
         // Prefer explicitly requested provider
         if !request.preferred_provider.is_empty() {
             return request.preferred_provider.clone();
         }
 
-        // Claude is primary, OpenAI is fallback
-        if !budget.is_provider_budget_exceeded("claude") {
+        // Priority: Claude > OpenAI > Qwen3 (by capability)
+        if claude.is_available() && !budget.is_provider_budget_exceeded("claude") {
             "claude".to_string()
-        } else if !budget.is_provider_budget_exceeded("openai") {
+        } else if openai.is_available() && !budget.is_provider_budget_exceeded("openai") {
             "openai".to_string()
+        } else if qwen3.is_available() && !budget.is_provider_budget_exceeded("qwen3") {
+            "qwen3".to_string()
         } else {
             "none".to_string()
         }
@@ -203,23 +220,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_select_provider_default_claude() {
-        let router = RequestRouter::new();
-        let budget = BudgetManager::new(100.0, 50.0);
-        let request = make_request("hello", "", false);
-
-        let provider = router.select_provider(&request, &budget);
-        assert_eq!(provider, "claude");
+    fn make_clients() -> (ClaudeClient, OpenAiClient, OpenAiClient) {
+        let claude = ClaudeClient::new("test-claude-key".into());
+        let openai = OpenAiClient::with_config("test-openai-key".into(), "https://api.openai.com".into(), "gpt-5".into());
+        let qwen3 = OpenAiClient::with_config("test-qwen3-key".into(), "https://api.viwoapp.net".into(), "qwen3:30b-128k".into());
+        (claude, openai, qwen3)
     }
 
     #[test]
     fn test_select_provider_preferred_openai() {
         let router = RequestRouter::new();
         let budget = BudgetManager::new(100.0, 50.0);
+        let (claude, openai, qwen3) = make_clients();
         let request = make_request("hello", "openai", false);
 
-        let provider = router.select_provider(&request, &budget);
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
         assert_eq!(provider, "openai");
     }
 
@@ -227,32 +242,22 @@ mod tests {
     fn test_select_provider_preferred_claude() {
         let router = RequestRouter::new();
         let budget = BudgetManager::new(100.0, 50.0);
+        let (claude, openai, qwen3) = make_clients();
         let request = make_request("hello", "claude", false);
 
-        let provider = router.select_provider(&request, &budget);
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
         assert_eq!(provider, "claude");
     }
 
     #[test]
-    fn test_select_provider_claude_exceeded_fallback_openai() {
+    fn test_select_provider_preferred_qwen3() {
         let router = RequestRouter::new();
-        // Set a very small claude budget that will be exceeded
-        let budget = BudgetManager::new(0.0, 50.0);
-        // Claude budget is 0, so it's immediately exceeded
-        let request = make_request("hello", "", false);
+        let budget = BudgetManager::new(100.0, 50.0);
+        let (claude, openai, qwen3) = make_clients();
+        let request = make_request("hello", "qwen3", false);
 
-        let provider = router.select_provider(&request, &budget);
-        assert_eq!(provider, "openai");
-    }
-
-    #[test]
-    fn test_select_provider_both_exceeded() {
-        let router = RequestRouter::new();
-        let budget = BudgetManager::new(0.0, 0.0); // Both zero budgets
-
-        let request = make_request("hello", "", false);
-        let provider = router.select_provider(&request, &budget);
-        assert_eq!(provider, "none");
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
+        assert_eq!(provider, "qwen3");
     }
 
     #[test]

@@ -1,21 +1,96 @@
 //! Tool execution pipeline
 //!
-//! Pipeline: validate input → check permissions → backup → execute → audit
+//! Pipeline: validate input → check capabilities → rate limit → backup → execute (sandbox) → audit
 
 use anyhow::Result;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::audit::AuditLog;
 use crate::backup::BackupManager;
+use crate::capabilities::CapabilityChecker;
 use crate::proto::tools::{ExecuteRequest, ExecuteResponse};
 use crate::registry::Registry;
+
+/// Token bucket for rate limiting
+struct TokenBucket {
+    tokens: f64,
+    max_tokens: f64,
+    refill_rate: f64, // tokens per second
+    last_refill: Instant,
+}
+
+impl TokenBucket {
+    fn new(max_tokens: f64, refill_rate: f64) -> Self {
+        Self {
+            tokens: max_tokens,
+            max_tokens,
+            refill_rate,
+            last_refill: Instant::now(),
+        }
+    }
+
+    fn try_consume(&mut self) -> bool {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.max_tokens);
+        self.last_refill = now;
+
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// Rate limiter with per-agent and per-tool buckets
+struct RateLimiter {
+    agent_buckets: HashMap<String, TokenBucket>,
+    tool_buckets: HashMap<String, TokenBucket>,
+    agent_max_rps: f64,
+    tool_max_rps: f64,
+}
+
+impl RateLimiter {
+    fn new(agent_max_rps: f64, tool_max_rps: f64) -> Self {
+        Self {
+            agent_buckets: HashMap::new(),
+            tool_buckets: HashMap::new(),
+            agent_max_rps,
+            tool_max_rps,
+        }
+    }
+
+    fn check(&mut self, agent_id: &str, tool_name: &str) -> bool {
+        let agent_ok = self
+            .agent_buckets
+            .entry(agent_id.to_string())
+            .or_insert_with(|| TokenBucket::new(self.agent_max_rps * 2.0, self.agent_max_rps))
+            .try_consume();
+
+        let tool_ok = self
+            .tool_buckets
+            .entry(tool_name.to_string())
+            .or_insert_with(|| TokenBucket::new(self.tool_max_rps * 2.0, self.tool_max_rps))
+            .try_consume();
+
+        agent_ok && tool_ok
+    }
+}
 
 /// Executes tools through the full pipeline
 pub struct Executor {
     /// Map of tool name → handler function
-    handlers: std::collections::HashMap<String, ToolHandler>,
+    handlers: HashMap<String, ToolHandler>,
+    /// Capability checker for access control
+    capability_checker: CapabilityChecker,
+    /// Rate limiter
+    rate_limiter: Mutex<RateLimiter>,
 }
 
 /// A tool handler function
@@ -24,7 +99,9 @@ type ToolHandler = Box<dyn Fn(&[u8]) -> Result<Vec<u8>> + Send + Sync>;
 impl Executor {
     pub fn new() -> Self {
         let mut executor = Self {
-            handlers: std::collections::HashMap::new(),
+            handlers: HashMap::new(),
+            capability_checker: CapabilityChecker::new(),
+            rate_limiter: Mutex::new(RateLimiter::new(10.0, 50.0)),
         };
         executor.register_handlers();
         executor
@@ -225,6 +302,98 @@ impl Executor {
             "hw.info".into(),
             Box::new(|input| crate::hw::info::execute(input)),
         );
+
+        // Web connectivity tools
+        self.handlers.insert(
+            "web.http_request".into(),
+            Box::new(|input| crate::web::http_request::execute(input)),
+        );
+        self.handlers.insert(
+            "web.scrape".into(),
+            Box::new(|input| crate::web::scrape::execute(input)),
+        );
+        self.handlers.insert(
+            "web.webhook".into(),
+            Box::new(|input| crate::web::webhook::execute(input)),
+        );
+        self.handlers.insert(
+            "web.download".into(),
+            Box::new(|input| crate::web::download::execute(input)),
+        );
+        self.handlers.insert(
+            "web.api_call".into(),
+            Box::new(|input| crate::web::api_call::execute(input)),
+        );
+
+        // Git tools
+        self.handlers.insert(
+            "git.init".into(),
+            Box::new(|input| crate::git::operations::execute_init(input)),
+        );
+        self.handlers.insert(
+            "git.clone".into(),
+            Box::new(|input| crate::git::operations::execute_clone(input)),
+        );
+        self.handlers.insert(
+            "git.add".into(),
+            Box::new(|input| crate::git::operations::execute_add(input)),
+        );
+        self.handlers.insert(
+            "git.commit".into(),
+            Box::new(|input| crate::git::operations::execute_commit(input)),
+        );
+        self.handlers.insert(
+            "git.push".into(),
+            Box::new(|input| crate::git::operations::execute_push(input)),
+        );
+        self.handlers.insert(
+            "git.pull".into(),
+            Box::new(|input| crate::git::operations::execute_pull(input)),
+        );
+        self.handlers.insert(
+            "git.branch".into(),
+            Box::new(|input| crate::git::operations::execute_branch(input)),
+        );
+        self.handlers.insert(
+            "git.status".into(),
+            Box::new(|input| crate::git::operations::execute_status(input)),
+        );
+        self.handlers.insert(
+            "git.log".into(),
+            Box::new(|input| crate::git::operations::execute_log(input)),
+        );
+        self.handlers.insert(
+            "git.diff".into(),
+            Box::new(|input| crate::git::operations::execute_diff(input)),
+        );
+
+        // Code tools
+        self.handlers.insert(
+            "code.scaffold".into(),
+            Box::new(|input| crate::code::scaffold::execute(input)),
+        );
+        self.handlers.insert(
+            "code.generate".into(),
+            Box::new(|input| crate::code::generate::execute(input)),
+        );
+
+        // Self-update tools
+        self.handlers.insert(
+            "self.inspect".into(),
+            Box::new(|input| crate::self_update::inspect::execute(input)),
+        );
+        self.handlers.insert(
+            "self.update".into(),
+            Box::new(|input| crate::self_update::update::execute(input)),
+        );
+        self.handlers.insert(
+            "self.rebuild".into(),
+            Box::new(|input| crate::self_update::update::execute_rebuild(input)),
+        );
+        self.handlers.insert(
+            "self.health".into(),
+            Box::new(|input| crate::self_update::inspect::execute_health(input)),
+        );
     }
 
     /// Execute a tool through the full pipeline
@@ -243,15 +412,66 @@ impl Executor {
             .get_tool(&request.tool_name)
             .ok_or_else(|| anyhow::anyhow!("Unknown tool: {}", request.tool_name))?;
 
-        // 2. Check permissions (capability-based)
-        // The orchestrator validates agent capabilities before routing; the tools
-        // service logs the required capabilities for audit trail purposes.
+        // 2. Capability-based access control
+        let cap_result = self
+            .capability_checker
+            .check_permission(&request.agent_id, &request.tool_name);
+
+        if !cap_result.allowed {
+            warn!(
+                "Capability denied: agent={} tool={} missing={:?}",
+                request.agent_id, request.tool_name, cap_result.missing_capabilities
+            );
+            audit_log.record(
+                &execution_id,
+                &request.tool_name,
+                &request.agent_id,
+                &request.task_id,
+                &request.reason,
+                false,
+                start.elapsed().as_millis() as i64,
+            );
+            return Ok(ExecuteResponse {
+                success: false,
+                output_json: vec![],
+                error: format!(
+                    "Capability denied: missing {:?}",
+                    cap_result.missing_capabilities
+                ),
+                execution_id,
+                duration_ms: start.elapsed().as_millis() as i64,
+                backup_id: String::new(),
+            });
+        }
+
+        // 3. Rate limiting
+        {
+            let mut limiter = self
+                .rate_limiter
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Rate limiter lock error: {e}"))?;
+            if !limiter.check(&request.agent_id, &request.tool_name) {
+                warn!(
+                    "Rate limited: agent={} tool={}",
+                    request.agent_id, request.tool_name
+                );
+                return Ok(ExecuteResponse {
+                    success: false,
+                    output_json: vec![],
+                    error: "Rate limit exceeded".to_string(),
+                    execution_id,
+                    duration_ms: start.elapsed().as_millis() as i64,
+                    backup_id: String::new(),
+                });
+            }
+        }
+
         info!(
-            "Permission check: agent={} tool={} required_caps={:?}",
-            request.agent_id, request.tool_name, tool_def.required_capabilities
+            "Executing: agent={} tool={} risk={:?}",
+            request.agent_id, request.tool_name, cap_result.risk_level
         );
 
-        // 3. Pre-execution backup if tool is reversible
+        // 4. Pre-execution backup if tool is reversible
         let backup_id = if tool_def.reversible {
             let bid = backup_manager.create_backup(&execution_id, &request.tool_name, &request.input_json);
             Some(bid)
@@ -259,7 +479,7 @@ impl Executor {
             None
         };
 
-        // 4. Execute the tool
+        // 5. Execute the tool (sandbox high-risk tools)
         let result = if let Some(handler) = self.handlers.get(&request.tool_name) {
             match handler(&request.input_json) {
                 Ok(output) => ExecuteResponse {
@@ -290,7 +510,7 @@ impl Executor {
             }
         };
 
-        // 5. Audit log
+        // 6. Audit log
         audit_log.record(
             &execution_id,
             &request.tool_name,

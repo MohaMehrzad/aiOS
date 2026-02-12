@@ -53,12 +53,22 @@ struct ClaudeUsage {
 
 impl ClaudeClient {
     pub fn new(api_key: String) -> Self {
+        let model = std::env::var("CLAUDE_MODEL")
+            .unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
         Self {
             api_key,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(300))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             base_url: "https://api.anthropic.com".to_string(),
-            model: "claude-sonnet-4-5-20250929".to_string(),
+            model,
         }
+    }
+
+    /// Get the model name this client is configured for
+    pub fn model_name(&self) -> &str {
+        &self.model
     }
 
     pub fn is_available(&self) -> bool {

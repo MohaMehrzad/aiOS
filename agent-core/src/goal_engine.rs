@@ -159,6 +159,18 @@ impl GoalEngine {
         }
     }
 
+    /// Mark a task within a goal as completed
+    pub fn complete_task(&mut self, goal_id: &str, task_id: &str) {
+        if let Some(tasks) = self.goal_tasks.get_mut(goal_id) {
+            for task in tasks.iter_mut() {
+                if task.id == task_id {
+                    task.status = "completed".to_string();
+                    break;
+                }
+            }
+        }
+    }
+
     /// Update goal status
     pub fn update_status(&mut self, goal_id: &str, status: &str) {
         if let Some(goal) = self.goals.get_mut(goal_id) {

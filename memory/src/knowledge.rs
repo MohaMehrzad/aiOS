@@ -1,14 +1,90 @@
 //! Knowledge Base — stores learned facts, documentation, procedures
 //!
-//! Keyword-based search for now, will add vector embeddings via ChromaDB later.
+//! Hybrid search: keyword matching + simple vector embeddings stored in SQLite.
+//! Embeddings are lightweight bag-of-words TF vectors stored as BLOBs.
 
 use anyhow::Result;
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::proto::memory::*;
 
-/// In-process knowledge base with SQLite storage
+/// Generate a simple bag-of-words embedding vector for text
+/// Returns a normalized vector of word frequencies
+fn generate_embedding(text: &str) -> Vec<f32> {
+    let words: Vec<String> = text
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .map(|w| w.to_string())
+        .collect();
+
+    if words.is_empty() {
+        return vec![0.0; 64];
+    }
+
+    // Hash each word into a fixed-size vector (dimension 64)
+    let dim = 64;
+    let mut vec = vec![0.0f32; dim];
+    let mut word_counts: HashMap<String, usize> = HashMap::new();
+
+    for word in &words {
+        *word_counts.entry(word.clone()).or_insert(0) += 1;
+    }
+
+    for (word, count) in &word_counts {
+        // Simple hash-based projection
+        let hash = word.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let idx = (hash % dim as u64) as usize;
+        vec[idx] += *count as f32;
+        // Also fill a second bin for better distribution
+        let idx2 = ((hash >> 16) % dim as u64) as usize;
+        vec[idx2] += (*count as f32) * 0.5;
+    }
+
+    // L2 normalize
+    let norm: f32 = vec.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm > 0.0 {
+        for v in &mut vec {
+            *v /= norm;
+        }
+    }
+
+    vec
+}
+
+/// Cosine similarity between two vectors
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)) as f64
+}
+
+/// Serialize embedding to bytes
+fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
+    embedding
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect()
+}
+
+/// Deserialize embedding from bytes
+fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// In-process knowledge base with SQLite storage and vector embeddings
 pub struct KnowledgeBase {
     conn: Mutex<Connection>,
 }
@@ -24,6 +100,7 @@ impl KnowledgeBase {
                 content TEXT NOT NULL,
                 source TEXT NOT NULL,
                 tags TEXT,
+                embedding BLOB,
                 created_at INTEGER NOT NULL
             );
 
@@ -36,28 +113,34 @@ impl KnowledgeBase {
         })
     }
 
-    /// Add a knowledge entry
+    /// Add a knowledge entry with automatic embedding generation
     pub fn add_entry(&mut self, entry: &KnowledgeEntry) -> Result<()> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let tags = entry.tags.join(",");
         let now = chrono::Utc::now().timestamp();
 
+        // Generate embedding from title + content + tags
+        let full_text = format!("{} {} {}", entry.title, entry.content, tags);
+        let embedding = generate_embedding(&full_text);
+        let embedding_bytes = embedding_to_bytes(&embedding);
+
         conn.execute(
-            "INSERT INTO knowledge (title, content, source, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![entry.title, entry.content, entry.source, tags, now],
+            "INSERT INTO knowledge (title, content, source, tags, embedding, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![entry.title, entry.content, entry.source, tags, embedding_bytes, now],
         )?;
 
         Ok(())
     }
 
-    /// Search knowledge base by keywords
+    /// Hybrid search: combines keyword relevance with vector similarity
     pub fn search(&self, query: &str, n_results: i32) -> Result<Vec<SearchResult>> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let limit = if n_results <= 0 { 10 } else { n_results };
         let keywords: Vec<&str> = query.split_whitespace().collect();
+        let query_embedding = generate_embedding(query);
 
         let mut stmt = conn.prepare(
-            "SELECT rowid, title, content, source, tags FROM knowledge ORDER BY created_at DESC LIMIT ?1",
+            "SELECT rowid, title, content, source, tags, embedding FROM knowledge ORDER BY created_at DESC LIMIT ?1",
         )?;
 
         let mut results: Vec<SearchResult> = Vec::new();
@@ -68,13 +151,27 @@ impl KnowledgeBase {
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                row.get::<_, Option<Vec<u8>>>(5)?,
             ))
         })?;
 
         for row in rows {
-            let (id, title, content, source, tags) = row?;
+            let (id, title, content, source, tags, embedding_bytes) = row?;
             let full_text = format!("{title} {content} {tags}");
-            let relevance = keyword_relevance(&keywords, &full_text);
+
+            // Keyword score
+            let keyword_score = keyword_relevance(&keywords, &full_text);
+
+            // Vector similarity score
+            let vector_score = if let Some(ref bytes) = embedding_bytes {
+                let stored_embedding = bytes_to_embedding(bytes);
+                cosine_similarity(&query_embedding, &stored_embedding)
+            } else {
+                0.0
+            };
+
+            // Hybrid score: weighted combination (keyword 0.4, vector 0.6)
+            let relevance = keyword_score * 0.4 + vector_score * 0.6;
 
             if relevance > 0.0 {
                 results.push(SearchResult {

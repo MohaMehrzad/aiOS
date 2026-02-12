@@ -141,6 +141,36 @@ impl BudgetManager {
         }
     }
 
+    /// Pre-check: reject requests that would exceed the budget
+    /// Returns Ok(()) if the request can proceed, Err with reason if rejected
+    pub fn pre_check(&self, provider: &str) -> Result<(), String> {
+        if self.is_budget_exceeded() {
+            return Err("All API budgets exceeded for this billing period".to_string());
+        }
+
+        if self.is_provider_budget_exceeded(provider) {
+            let (used, budget) = match provider {
+                "claude" => (self.claude_used, self.claude_monthly_budget),
+                "openai" => (self.openai_used, self.openai_monthly_budget),
+                _ => return Err(format!("Unknown provider: {provider}")),
+            };
+            return Err(format!(
+                "{provider} budget exceeded: ${used:.2} / ${budget:.2}"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Get remaining budget for a provider
+    pub fn remaining_budget(&self, provider: &str) -> f64 {
+        match provider {
+            "claude" => (self.claude_monthly_budget - self.claude_used).max(0.0),
+            "openai" => (self.openai_monthly_budget - self.openai_used).max(0.0),
+            _ => 0.0,
+        }
+    }
+
     /// Reset monthly counters if we're in a new month
     fn maybe_reset_monthly(&mut self) {
         let current_start = current_month_start();
@@ -311,6 +341,38 @@ mod tests {
         assert_eq!(record.output_tokens, 500);
         assert!(record.cost_usd > 0.0);
         assert!(record.timestamp > 0);
+    }
+
+    #[test]
+    fn test_pre_check_within_budget() {
+        let bm = BudgetManager::new(100.0, 50.0);
+        assert!(bm.pre_check("claude").is_ok());
+        assert!(bm.pre_check("openai").is_ok());
+    }
+
+    #[test]
+    fn test_pre_check_exceeded() {
+        let mut bm = BudgetManager::new(0.0001, 100.0);
+        bm.record_usage("claude", 100000, "claude-sonnet");
+        assert!(bm.pre_check("claude").is_err());
+        assert!(bm.pre_check("openai").is_ok());
+    }
+
+    #[test]
+    fn test_pre_check_unknown_provider() {
+        let bm = BudgetManager::new(100.0, 50.0);
+        // Unknown provider is not exceeded since is_budget_exceeded checks both
+        assert!(bm.pre_check("unknown").is_err());
+    }
+
+    #[test]
+    fn test_remaining_budget() {
+        let mut bm = BudgetManager::new(100.0, 50.0);
+        assert_eq!(bm.remaining_budget("claude"), 100.0);
+        bm.record_usage("claude", 1000, "claude-sonnet");
+        assert!(bm.remaining_budget("claude") < 100.0);
+        assert_eq!(bm.remaining_budget("openai"), 50.0);
+        assert_eq!(bm.remaining_budget("unknown"), 0.0);
     }
 
     #[test]

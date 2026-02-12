@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 rusqlite = { workspace = true }
+tokio-util = { workspace = true }
 
 [build-dependencies]
 tonic-build = { workspace = true }

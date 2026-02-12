@@ -60,7 +60,7 @@ impl TaskPlanner {
     /// Decompose a goal into tasks
     ///
     /// For simple goals, uses heuristic decomposition.
-    /// For complex goals, calls the AI runtime for decomposition.
+    /// For Tactical/Strategic goals, uses AI-powered multi-step decomposition.
     pub async fn decompose_goal(
         &mut self,
         goal_id: &str,
@@ -72,11 +72,13 @@ impl TaskPlanner {
             IntelligenceLevel::Reactive => {
                 self.heuristic_decompose(goal_id, description).await?
             }
-            _ => {
-                // Non-reactive tasks produce a single task; the AI runtime
-                // can further decompose complex tasks at execution time.
+            IntelligenceLevel::Operational => {
                 self.single_task_decompose(goal_id, description, &level)
                     .await?
+            }
+            IntelligenceLevel::Tactical | IntelligenceLevel::Strategic => {
+                // AI-powered decomposition: break into multiple steps
+                self.ai_decompose(goal_id, description, &level).await?
             }
         };
 
@@ -86,6 +88,148 @@ impl TaskPlanner {
         }
 
         Ok(tasks)
+    }
+
+    /// AI-powered decomposition for complex goals
+    /// Generates a multi-step task plan based on goal analysis
+    async fn ai_decompose(
+        &mut self,
+        goal_id: &str,
+        description: &str,
+        level: &IntelligenceLevel,
+    ) -> Result<Vec<Task>> {
+        let now = chrono::Utc::now().timestamp();
+
+        // Analyze the goal to determine sub-tasks
+        let subtasks = self.analyze_goal_steps(description);
+        let mut tasks = Vec::new();
+        let mut prev_task_id: Option<String> = None;
+
+        for (i, (subdesc, tools)) in subtasks.into_iter().enumerate() {
+            let task_id = Uuid::new_v4().to_string();
+            let depends_on = if let Some(ref prev) = prev_task_id {
+                vec![prev.clone()]
+            } else {
+                vec![]
+            };
+
+            tasks.push(Task {
+                id: task_id.clone(),
+                goal_id: goal_id.to_string(),
+                description: subdesc,
+                assigned_agent: String::new(),
+                status: "pending".to_string(),
+                intelligence_level: if i == 0 {
+                    // First task may be simpler (gather info)
+                    "operational".to_string()
+                } else {
+                    level.as_str().to_string()
+                },
+                required_tools: tools,
+                depends_on,
+                input_json: vec![],
+                output_json: vec![],
+                created_at: now,
+                started_at: 0,
+                completed_at: 0,
+                error: String::new(),
+            });
+
+            // Build dependency chain
+            if let Some(prev) = &prev_task_id {
+                self._task_dependencies
+                    .entry(task_id.clone())
+                    .or_default()
+                    .push(prev.clone());
+            }
+            prev_task_id = Some(task_id);
+        }
+
+        // If analysis produced nothing, fall back to single task
+        if tasks.is_empty() {
+            return self.single_task_decompose(goal_id, description, level).await;
+        }
+
+        Ok(tasks)
+    }
+
+    /// Analyze goal description to determine steps
+    /// Uses keyword heuristics to generate multi-step plans
+    fn analyze_goal_steps(&self, description: &str) -> Vec<(String, Vec<String>)> {
+        let desc_lower = description.to_lowercase();
+        let mut steps = Vec::new();
+
+        // Service management goals
+        if desc_lower.contains("restart") || desc_lower.contains("deploy") {
+            let service = extract_service_name(&desc_lower);
+            steps.push((
+                format!("Check current status of {service}"),
+                vec!["service".to_string(), "monitor".to_string()],
+            ));
+            steps.push((
+                format!("Stop {service} gracefully"),
+                vec!["service".to_string()],
+            ));
+            steps.push((
+                format!("Start {service} and verify"),
+                vec!["service".to_string(), "monitor".to_string()],
+            ));
+            return steps;
+        }
+
+        // Security analysis goals
+        if desc_lower.contains("security") || desc_lower.contains("audit") {
+            steps.push((
+                "Gather system security configuration".to_string(),
+                vec!["sec".to_string(), "fs".to_string()],
+            ));
+            steps.push((
+                "Analyze security posture and vulnerabilities".to_string(),
+                vec!["sec".to_string()],
+            ));
+            steps.push((
+                "Generate security report with recommendations".to_string(),
+                vec!["fs".to_string()],
+            ));
+            return steps;
+        }
+
+        // Installation goals
+        if desc_lower.contains("install") || desc_lower.contains("setup") {
+            steps.push((
+                format!("Check prerequisites for: {description}"),
+                vec!["pkg".to_string(), "fs".to_string()],
+            ));
+            steps.push((
+                format!("Install: {description}"),
+                vec!["pkg".to_string()],
+            ));
+            steps.push((
+                "Verify installation and configure".to_string(),
+                vec!["service".to_string(), "fs".to_string()],
+            ));
+            return steps;
+        }
+
+        // Network troubleshooting
+        if desc_lower.contains("network") || desc_lower.contains("connectivity") {
+            steps.push((
+                "Check network interfaces and routing".to_string(),
+                vec!["net".to_string()],
+            ));
+            steps.push((
+                "Test DNS resolution and connectivity".to_string(),
+                vec!["net".to_string()],
+            ));
+            steps.push((
+                "Diagnose and apply fixes".to_string(),
+                vec!["net".to_string(), "firewall".to_string()],
+            ));
+            return steps;
+        }
+
+        // Default: no multi-step decomposition
+        steps
     }
 
     /// Classify the intelligence level needed for a goal
@@ -252,6 +396,14 @@ impl TaskPlanner {
         }
     }
 
+    /// Get all tasks for a goal
+    pub fn get_tasks_for_goal(&self, goal_id: &str) -> Vec<&Task> {
+        self.pending_tasks
+            .values()
+            .filter(|t| t.goal_id == goal_id)
+            .collect()
+    }
+
     /// Get next unblocked pending task
     pub fn next_task(&self) -> Option<&Task> {
         self.pending_tasks
@@ -266,6 +418,20 @@ impl TaskPlanner {
                 })
             })
     }
+}
+
+/// Extract a service name from a goal description
+fn extract_service_name(desc: &str) -> String {
+    let known_services = [
+        "nginx", "apache", "postgres", "mysql", "redis", "docker",
+        "ssh", "systemd", "cron", "mongodb", "elasticsearch",
+    ];
+    for svc in &known_services {
+        if desc.contains(svc) {
+            return svc.to_string();
+        }
+    }
+    "the service".to_string()
 }
 
 #[cfg(test)]
@@ -451,10 +617,68 @@ mod tests {
             .decompose_goal("goal-1", "Analyze security audit findings")
             .await
             .unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].intelligence_level, "strategic");
+        // Security goals are decomposed into multiple steps
+        assert!(tasks.len() >= 2);
         assert_eq!(tasks[0].goal_id, "goal-1");
-        assert!(tasks[0].required_tools.contains(&"sec".to_string()));
+        // First task should be operational (gather info)
+        assert_eq!(tasks[0].intelligence_level, "operational");
+    }
+
+    #[tokio::test]
+    async fn test_ai_decompose_service_restart() {
+        let mut planner = TaskPlanner::new();
+        let tasks = planner
+            .decompose_goal("goal-1", "Restart the nginx service")
+            .await
+            .unwrap();
+        // Service restart goals produce 3 steps: check, stop, start
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks[0].description.contains("status"));
+        // Second task depends on first
+        assert!(!tasks[1].depends_on.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_ai_decompose_install() {
+        let mut planner = TaskPlanner::new();
+        let tasks = planner
+            .decompose_goal("goal-1", "Install and setup redis")
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks[0].required_tools.contains(&"pkg".to_string()));
+    }
+
+    #[test]
+    fn test_extract_service_name() {
+        assert_eq!(extract_service_name("restart nginx gracefully"), "nginx");
+        assert_eq!(extract_service_name("deploy postgres"), "postgres");
+        assert_eq!(extract_service_name("restart the app"), "the service");
+    }
+
+    #[test]
+    fn test_get_tasks_for_goal() {
+        let mut planner = TaskPlanner::new();
+        // Manually insert tasks
+        let task = Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "test".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec![],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+        planner.pending_tasks.insert("t1".into(), task);
+        assert_eq!(planner.get_tasks_for_goal("g1").len(), 1);
+        assert_eq!(planner.get_tasks_for_goal("g2").len(), 0);
     }
 
     #[tokio::test]

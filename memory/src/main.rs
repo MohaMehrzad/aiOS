@@ -16,6 +16,7 @@ mod operational;
 mod working;
 mod longterm;
 mod knowledge;
+mod migration;
 
 pub mod proto {
     pub mod common {

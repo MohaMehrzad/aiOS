@@ -16,6 +16,10 @@ mod executor;
 mod audit;
 mod backup;
 mod schema;
+pub mod capabilities;
+pub mod secrets;
+pub mod sandbox;
+pub mod firewall_apply;
 pub mod fs;
 pub mod process;
 pub mod service;
@@ -25,6 +29,10 @@ pub mod pkg;
 pub mod sec;
 pub mod monitor;
 pub mod hw;
+pub mod web;
+pub mod git;
+pub mod code;
+pub mod self_update;
 
 pub mod proto {
     pub mod common {
@@ -225,6 +233,14 @@ fn register_builtin_tools(reg: &mut registry::Registry) {
     monitor::register_tools(reg);
     // Hardware tools
     hw::register_tools(reg);
+    // Web connectivity tools
+    web::register_tools(reg);
+    // Git tools
+    git::register_tools(reg);
+    // Code generation tools
+    code::register_tools(reg);
+    // Self-update tools
+    self_update::register_tools(reg);
 
     info!("Registered {} built-in tools", reg.tool_count());
 }
