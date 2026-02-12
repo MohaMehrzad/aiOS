@@ -45,6 +45,8 @@ pub async fn start_management_server(
         .route("/api/goals", get(list_goals))
         .route("/api/goals", post(submit_goal))
         .route("/api/goals/:goal_id/tasks", get(get_goal_tasks))
+        .route("/api/goals/:goal_id/messages", get(get_goal_messages))
+        .route("/api/goals/:goal_id/messages", post(post_goal_message))
         .route("/api/chat", post(chat_handler))
         .route("/api/agents", get(list_agents))
         .route("/api/health", get(health_check))
@@ -135,6 +137,19 @@ struct AgentResponse {
     capabilities: Vec<String>,
 }
 
+#[derive(Deserialize)]
+struct PostMessageRequest {
+    content: String,
+}
+
+#[derive(Serialize)]
+struct GoalMessageResponse {
+    id: String,
+    sender: String,
+    content: String,
+    timestamp: i64,
+}
+
 #[derive(Serialize)]
 struct HealthResponse {
     healthy: bool,
@@ -211,6 +226,65 @@ async fn get_goal_tasks(
         }
         Err(_) => Err(StatusCode::NOT_FOUND),
     }
+}
+
+/// Get messages for a goal's conversation thread
+async fn get_goal_messages(
+    State(state): State<MgmtState>,
+    Path(goal_id): Path<String>,
+) -> Json<Vec<GoalMessageResponse>> {
+    let s = state.orchestrator.read().await;
+    let messages = s.goal_engine.get_messages(&goal_id);
+    let response: Vec<GoalMessageResponse> = messages
+        .into_iter()
+        .map(|m| GoalMessageResponse {
+            id: m.id,
+            sender: m.sender,
+            content: m.content,
+            timestamp: m.timestamp,
+        })
+        .collect();
+    Json(response)
+}
+
+/// Post a user message to a goal and resume awaiting tasks
+async fn post_goal_message(
+    State(state): State<MgmtState>,
+    Path(goal_id): Path<String>,
+    Json(req): Json<PostMessageRequest>,
+) -> Result<Json<GoalMessageResponse>, StatusCode> {
+    let mut s = state.orchestrator.write().await;
+
+    let msg_id = s.goal_engine.add_message(&goal_id, "user", &req.content);
+    let timestamp = chrono::Utc::now().timestamp();
+
+    // Find tasks in "awaiting_input" for this goal and resume them
+    let awaiting_tasks: Vec<String> = s
+        .task_planner
+        .get_tasks_for_goal(&goal_id)
+        .iter()
+        .filter(|t| t.status == "awaiting_input")
+        .map(|t| t.id.clone())
+        .collect();
+
+    for task_id in &awaiting_tasks {
+        s.task_planner.resume_task(task_id);
+        s.goal_engine.update_task_status(&goal_id, task_id, "pending");
+    }
+
+    if !awaiting_tasks.is_empty() {
+        tracing::info!(
+            "Resumed {} awaiting tasks for goal {goal_id}",
+            awaiting_tasks.len()
+        );
+    }
+
+    Ok(Json(GoalMessageResponse {
+        id: msg_id,
+        sender: "user".to_string(),
+        content: req.content,
+        timestamp,
+    }))
 }
 
 /// Build a system context string with real state for the AI chat
@@ -685,8 +759,17 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                 <span id="goal-result" style="margin-left:10px;color:#6b7280"></span>
             </div>
             <div>
-                <h2>Goal Output</h2>
-                <div class="output-box" id="goal-output" style="min-height:80px;color:#6b7280">Click on a goal to see its AI output...</div>
+                <h2>Goal Chat</h2>
+                <div id="goal-chat-area" style="min-height:300px;max-height:500px;overflow-y:auto;background:#0d1117;border:1px solid #1e3a5f;border-radius:6px;padding:10px">
+                    <div style="color:#6b7280;text-align:center;padding:40px 0">Click on a goal to see its progress and chat...</div>
+                </div>
+                <div id="goal-reply-area" style="display:none;margin-top:8px">
+                    <div style="background:#332200;border:1px solid #ffa500;border-radius:4px;padding:8px;margin-bottom:8px;font-size:0.85em;color:#ffa500">AI is awaiting your input</div>
+                    <div class="chat-input-row">
+                        <textarea id="goal-reply-input" rows="2" placeholder="Reply to AI..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendGoalMessage()}"></textarea>
+                        <button onclick="sendGoalMessage()">Reply</button>
+                    </div>
+                </div>
             </div>
         </div>
         <h2 style="margin-top:16px">Goals</h2>
@@ -810,11 +893,14 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
         }
 
         // --- Goals ---
+        let currentGoalId = null;
+        let goalRefreshInterval = null;
+
         async function refresh() {
             try {
                 const goals = await (await fetch('/api/goals')).json();
                 document.getElementById('goals-table').innerHTML = goals.map(g =>
-                    `<tr class="goal-row" onclick="loadGoalOutput('${g.id}')"><td>${g.id.slice(0,8)}</td><td>${escapeHtml(g.description.slice(0,80))}${g.description.length>80?'...':''}</td><td class="status-${g.status}">${g.status}</td><td>${g.priority}</td></tr>`
+                    `<tr class="goal-row" onclick="loadGoalChat('${g.id}')"><td>${g.id.slice(0,8)}</td><td>${escapeHtml(g.description.slice(0,80))}${g.description.length>80?'...':''}</td><td class="status-${g.status}">${g.status}</td><td>${g.priority}</td></tr>`
                 ).join('');
 
                 const agents = await (await fetch('/api/agents')).json();
@@ -824,35 +910,73 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
             } catch(e) { console.error('Refresh failed:', e); }
         }
 
-        async function loadGoalOutput(goalId) {
-            const box = document.getElementById('goal-output');
-            box.style.color = '#6b7280';
-            box.textContent = 'Loading...';
+        async function loadGoalChat(goalId) {
+            currentGoalId = goalId;
+            const area = document.getElementById('goal-chat-area');
+            area.innerHTML = '<div style="color:#6b7280;text-align:center;padding:20px"><span class="spinner"></span> Loading...</div>';
             try {
-                const tasks = await (await fetch(`/api/goals/${goalId}/tasks`)).json();
-                if (tasks.length === 0) {
-                    box.textContent = 'No tasks found for this goal.';
-                    return;
-                }
+                const [messages, tasks] = await Promise.all([
+                    fetch(`/api/goals/${goalId}/messages`).then(r => r.json()),
+                    fetch(`/api/goals/${goalId}/tasks`).then(r => r.json()),
+                ]);
+                let items = [];
+                for (const m of messages) { items.push({ type: 'message', ...m }); }
+                for (const t of tasks) { items.push({ type: 'task', ...t, timestamp: t.completed_at || t.created_at }); }
+                items.sort((a, b) => a.timestamp - b.timestamp);
+
                 let html = '';
-                for (const t of tasks) {
-                    const statusColor = t.status === 'completed' ? '#00ff88' : t.status === 'pending' ? '#ffa500' : '#ff4444';
-                    html += `<div style="margin-bottom:12px">`;
-                    html += `<div style="color:#00d4ff;font-weight:bold">Task: ${t.description.slice(0,60)}</div>`;
-                    html += `<div style="color:${statusColor};font-size:0.85em">Status: ${t.status} | Level: ${t.intelligence_level}${t.model_used ? ' | Model: '+t.model_used : ''}</div>`;
-                    if (t.output) {
-                        html += `<div style="margin-top:6px;color:#e0e0e0;white-space:pre-wrap">${formatResponse(t.output)}</div>`;
+                for (const item of items) {
+                    if (item.type === 'message') {
+                        if (item.sender === 'system') {
+                            html += `<div style="color:#6b7280;font-size:0.8em;padding:4px 8px;margin:4px 0">${escapeHtml(item.content)}</div>`;
+                        } else if (item.sender === 'ai') {
+                            html += `<div class="msg msg-ai" style="margin:6px 0"><div class="msg-label">AI</div><div class="msg-content">${formatResponse(item.content)}</div></div>`;
+                        } else {
+                            html += `<div class="msg msg-user" style="margin:6px 0"><div class="msg-label">You</div><div class="msg-content">${escapeHtml(item.content)}</div></div>`;
+                        }
+                    } else {
+                        const sc = item.status === 'completed' ? '#00ff88' : item.status === 'failed' ? '#ff4444' : item.status === 'awaiting_input' ? '#ffa500' : item.status === 'in_progress' ? '#00d4ff' : '#6b7280';
+                        const badge = `<span style="background:${sc}22;color:${sc};padding:2px 8px;border-radius:10px;font-size:0.8em">${item.status}</span>`;
+                        html += `<div style="border:1px solid #1e3a5f;border-radius:6px;padding:10px;margin:8px 0">`;
+                        html += `<div style="display:flex;justify-content:space-between;align-items:center"><span style="color:#00d4ff;font-weight:bold;font-size:0.9em">${escapeHtml(item.description.slice(0,60))}</span>${badge}</div>`;
+                        if (item.output) {
+                            html += `<div style="margin-top:6px;font-size:0.85em;color:#c0c0c0;white-space:pre-wrap;max-height:200px;overflow-y:auto">${formatResponse(item.output)}</div>`;
+                        }
+                        if (item.error) {
+                            html += `<div style="color:#ff4444;font-size:0.85em;margin-top:4px">Error: ${escapeHtml(item.error)}</div>`;
+                        }
+                        html += `</div>`;
                     }
-                    if (t.error) {
-                        html += `<div style="color:#ff4444;margin-top:4px">Error: ${escapeHtml(t.error)}</div>`;
-                    }
-                    html += `</div>`;
                 }
-                box.innerHTML = html;
-                box.style.color = '#e0e0e0';
+                area.innerHTML = html || '<div style="color:#6b7280;text-align:center;padding:20px">No activity yet...</div>';
+                area.scrollTop = area.scrollHeight;
+
+                const hasAwaiting = tasks.some(t => t.status === 'awaiting_input');
+                document.getElementById('goal-reply-area').style.display = hasAwaiting ? 'block' : 'none';
             } catch(e) {
-                box.textContent = 'Failed to load: ' + e;
+                area.innerHTML = `<div style="color:#ff4444;padding:20px">Failed to load: ${e}</div>`;
             }
+
+            if (goalRefreshInterval) clearInterval(goalRefreshInterval);
+            goalRefreshInterval = setInterval(() => {
+                if (currentGoalId) loadGoalChat(currentGoalId);
+            }, 2000);
+        }
+
+        async function sendGoalMessage() {
+            if (!currentGoalId) return;
+            const input = document.getElementById('goal-reply-input');
+            const msg = input.value.trim();
+            if (!msg) return;
+            input.value = '';
+            try {
+                await fetch(`/api/goals/${currentGoalId}/messages`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ content: msg })
+                });
+                loadGoalChat(currentGoalId);
+            } catch(e) { console.error('Failed to send message:', e); }
         }
 
         async function submitGoal() {
@@ -872,6 +996,7 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                 document.getElementById('goal-result').textContent = `Created: ${data.goal_id.slice(0,8)}`;
                 document.getElementById('goal-input').value = '';
                 refresh();
+                loadGoalChat(data.goal_id);
             } catch(e) { document.getElementById('goal-result').textContent = `Error: ${e}`; }
             btn.disabled = false;
             btn.textContent = 'Submit Goal';

@@ -8,10 +8,20 @@ use uuid::Uuid;
 
 use crate::proto::common::{Goal, Task};
 
+/// A message in a goal's conversation thread
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GoalMessage {
+    pub id: String,
+    pub sender: String, // "user" | "ai" | "system"
+    pub content: String,
+    pub timestamp: i64,
+}
+
 /// Manages goals and their lifecycle
 pub struct GoalEngine {
     goals: HashMap<String, Goal>,
     goal_tasks: HashMap<String, Vec<Task>>,
+    goal_messages: HashMap<String, Vec<GoalMessage>>,
 }
 
 impl GoalEngine {
@@ -19,6 +29,7 @@ impl GoalEngine {
         Self {
             goals: HashMap::new(),
             goal_tasks: HashMap::new(),
+            goal_messages: HashMap::new(),
         }
     }
 
@@ -44,8 +55,17 @@ impl GoalEngine {
             metadata_json: vec![],
         };
 
-        self.goals.insert(id.clone(), goal);
+        self.goals.insert(id.clone(), goal.clone());
         self.goal_tasks.insert(id.clone(), vec![]);
+
+        // Initialize conversation with a system message
+        let system_msg = GoalMessage {
+            id: Uuid::new_v4().to_string(),
+            sender: "system".to_string(),
+            content: format!("Goal submitted: {}", &goal.description),
+            timestamp: now,
+        };
+        self.goal_messages.insert(id.clone(), vec![system_msg]);
 
         tracing::info!("Goal submitted: {id}");
         Ok(id)
@@ -189,6 +209,42 @@ impl GoalEngine {
     /// Get metadata from a goal
     pub fn get_metadata(&self, goal_id: &str) -> Option<&[u8]> {
         self.goals.get(goal_id).map(|g| g.metadata_json.as_slice())
+    }
+
+    /// Add a message to a goal's conversation thread
+    pub fn add_message(&mut self, goal_id: &str, sender: &str, content: &str) -> String {
+        let msg_id = Uuid::new_v4().to_string();
+        let msg = GoalMessage {
+            id: msg_id.clone(),
+            sender: sender.to_string(),
+            content: content.to_string(),
+            timestamp: chrono::Utc::now().timestamp(),
+        };
+        self.goal_messages
+            .entry(goal_id.to_string())
+            .or_default()
+            .push(msg);
+        msg_id
+    }
+
+    /// Get all messages for a goal
+    pub fn get_messages(&self, goal_id: &str) -> Vec<GoalMessage> {
+        self.goal_messages
+            .get(goal_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Update task status within a goal (mirrors task_planner updates)
+    pub fn update_task_status(&mut self, goal_id: &str, task_id: &str, status: &str) {
+        if let Some(tasks) = self.goal_tasks.get_mut(goal_id) {
+            for task in tasks.iter_mut() {
+                if task.id == task_id {
+                    task.status = status.to_string();
+                    break;
+                }
+            }
+        }
     }
 }
 

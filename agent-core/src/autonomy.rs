@@ -86,6 +86,10 @@ async fn autonomy_tick(
     let goal_id = task.goal_id.clone();
     let level = IntelligenceLevel::from_str(&task.intelligence_level);
 
+    // Mark task as in-progress
+    state.task_planner.mark_in_progress(&task_id);
+    state.goal_engine.update_task_status(&goal_id, &task_id, "in_progress");
+
     // 3. Route task via agent router or handle directly
     let agent_id = state.agent_router.route_task(&task);
 
@@ -131,16 +135,16 @@ async fn autonomy_tick(
                 );
             }
             IntelligenceLevel::Operational | IntelligenceLevel::Tactical => {
-                // Read preferred provider from goal metadata
                 let preferred_provider = get_preferred_provider(&state, &goal_id);
+                let messages = state.goal_engine.get_messages(&goal_id);
 
-                // Call local AI runtime for operational/tactical tasks
                 let result = execute_ai_task(
                     &state.clients,
                     &task.description,
                     level.as_str(),
                     AiBackend::LocalRuntime,
                     &preferred_provider,
+                    &messages,
                 )
                 .await;
 
@@ -151,19 +155,20 @@ async fn autonomy_tick(
                     &task.description,
                     level.as_str(),
                     result,
-                );
+                )
+                .await;
             }
             IntelligenceLevel::Strategic => {
-                // Read preferred provider from goal metadata
                 let preferred_provider = get_preferred_provider(&state, &goal_id);
+                let messages = state.goal_engine.get_messages(&goal_id);
 
-                // Call API gateway for strategic tasks (Claude/GPT)
                 let result = execute_ai_task(
                     &state.clients,
                     &task.description,
                     level.as_str(),
                     AiBackend::ApiGateway,
                     &preferred_provider,
+                    &messages,
                 )
                 .await;
 
@@ -174,7 +179,8 @@ async fn autonomy_tick(
                     &task.description,
                     level.as_str(),
                     result,
-                );
+                )
+                .await;
             }
         }
     }
@@ -248,6 +254,7 @@ async fn execute_ai_task(
     intelligence_level: &str,
     preferred_backend: AiBackend,
     preferred_provider: &str,
+    conversation_history: &[crate::goal_engine::GoalMessage],
 ) -> AiInferenceResult {
     // Assemble context for the AI call
     let assembler = ContextAssembler::new(4096);
@@ -259,10 +266,26 @@ async fn execute_ai_task(
         ),
     };
 
-    let prompt = format!(
-        "Task: {task_description}\n\n\
-         Respond with a JSON object:\n\
-         {{\"reasoning\": \"...\", \"tool_calls\": [{{\"tool\": \"tool.name\", \"input\": {{}}}}], \"result\": \"...\"}}"
+    let mut prompt = format!("Task: {task_description}\n\n");
+
+    // Include conversation history for context (e.g., after user replies to clarification)
+    let relevant_messages: Vec<_> = conversation_history
+        .iter()
+        .filter(|m| m.sender == "user" || m.sender == "ai")
+        .collect();
+    if !relevant_messages.is_empty() {
+        prompt.push_str("Previous conversation:\n");
+        for msg in relevant_messages {
+            let label = if msg.sender == "user" { "[User]" } else { "[AI]" };
+            prompt.push_str(&format!("{}: {}\n", label, msg.content));
+        }
+        prompt.push_str("\nExecute the task using the provided context.\n\n");
+    }
+
+    prompt.push_str(
+        "Respond with a JSON object:\n\
+         {\"reasoning\": \"...\", \"tool_calls\": [{\"tool\": \"tool.name\", \"input\": {}}], \"result\": \"...\"}\n\
+         Or if you need more information: {\"needs_clarification\": true, \"questions\": [\"...\"]}"
     );
 
     // Try preferred backend first
@@ -438,8 +461,99 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
     calls
 }
 
+/// Execute a single tool call via the tools gRPC service
+async fn execute_tool_call(
+    clients: &crate::clients::ServiceClients,
+    task_id: &str,
+    tool_name: &str,
+    input_json: &[u8],
+) -> anyhow::Result<serde_json::Value> {
+    let mut client = clients
+        .tools()
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot connect to tools service: {e}"))?;
+
+    let request = tonic::Request::new(crate::proto::tools::ExecuteRequest {
+        tool_name: tool_name.to_string(),
+        agent_id: "autonomy-loop".to_string(),
+        task_id: task_id.to_string(),
+        input_json: input_json.to_vec(),
+        reason: format!("Autonomy loop executing tool for task {task_id}"),
+    });
+
+    let response = client
+        .execute(request)
+        .await
+        .map_err(|e| anyhow::anyhow!("Tool execution gRPC failed: {e}"))?;
+
+    let resp = response.into_inner();
+
+    if resp.success {
+        let output: serde_json::Value = serde_json::from_slice(&resp.output_json)
+            .unwrap_or_else(|_| {
+                serde_json::Value::String(String::from_utf8_lossy(&resp.output_json).to_string())
+            });
+        Ok(serde_json::json!({
+            "tool": tool_name,
+            "success": true,
+            "output": output,
+            "execution_id": resp.execution_id,
+            "duration_ms": resp.duration_ms,
+        }))
+    } else {
+        Err(anyhow::anyhow!("Tool '{}' failed: {}", tool_name, resp.error))
+    }
+}
+
+/// Parse clarification request from AI response
+fn parse_clarification(response_text: &str) -> Option<String> {
+    let text = response_text.trim();
+    let json_str = if text.starts_with("```") {
+        let lines: Vec<&str> = text.lines().collect();
+        let start = if lines
+            .first()
+            .map_or(false, |l| l.starts_with("```"))
+        {
+            1
+        } else {
+            0
+        };
+        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        lines[start..end].join("\n")
+    } else {
+        text.to_string()
+    };
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+        if parsed
+            .get("needs_clarification")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            if let Some(questions) = parsed.get("questions").and_then(|v| v.as_array()) {
+                let q_text: Vec<String> = questions
+                    .iter()
+                    .filter_map(|q| q.as_str().map(String::from))
+                    .collect();
+                if !q_text.is_empty() {
+                    return Some(q_text.join("\n"));
+                }
+            }
+            if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+                return Some(reasoning.to_string());
+            }
+            return Some("I need more information to proceed with this task.".to_string());
+        }
+    }
+    None
+}
+
 /// Handle the result of an AI inference call — execute tool calls and record results
-fn handle_ai_result(
+async fn handle_ai_result(
     state: &mut OrchestratorState,
     task_id: &str,
     goal_id: &str,
@@ -447,19 +561,113 @@ fn handle_ai_result(
     intelligence_level: &str,
     result: AiInferenceResult,
 ) {
+    // Check if AI is asking for clarification (only when no tool calls)
+    if result.tool_calls.is_empty() {
+        if let Some(clarification) = parse_clarification(&result.response_text) {
+            state.goal_engine.add_message(goal_id, "ai", &clarification);
+            state.task_planner.mark_awaiting_input(task_id);
+            state
+                .goal_engine
+                .update_task_status(goal_id, task_id, "awaiting_input");
+
+            info!("Task {task_id} awaiting user input: {clarification}");
+            return;
+        }
+    }
+
+    // Execute tool calls if present
     let output = if result.tool_calls.is_empty() {
         // No tool calls — the AI response is the result
         result.response_text.as_bytes().to_vec()
     } else {
-        // Queue tool calls for execution (tools are executed via gRPC in a separate tick)
-        let tool_names: Vec<String> = result.tool_calls.iter().map(|tc| tc.tool_name.clone()).collect();
+        // Execute each tool call via the tools gRPC service
+        let mut tool_results = Vec::new();
+        let mut all_succeeded = true;
+
+        for tc in &result.tool_calls {
+            info!(
+                "Executing tool '{}' for task {task_id}",
+                tc.tool_name
+            );
+            match execute_tool_call(&state.clients, task_id, &tc.tool_name, &tc.input_json).await {
+                Ok(tool_result) => {
+                    info!("Tool '{}' succeeded for task {task_id}", tc.tool_name);
+                    tool_results.push(tool_result);
+                }
+                Err(e) => {
+                    warn!("Tool '{}' failed for task {task_id}: {e}", tc.tool_name);
+                    all_succeeded = false;
+                    tool_results.push(serde_json::json!({
+                        "tool": tc.tool_name,
+                        "success": false,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        }
+
+        if !all_succeeded {
+            let error_msg = tool_results
+                .iter()
+                .filter(|r| r.get("success").and_then(|v| v.as_bool()) == Some(false))
+                .filter_map(|r| r.get("error").and_then(|v| v.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ");
+
+            state.task_planner.fail_task(task_id, &error_msg);
+            state
+                .goal_engine
+                .update_task_status(goal_id, task_id, "failed");
+            state.goal_engine.add_message(
+                goal_id,
+                "system",
+                &format!("Task failed: {error_msg}"),
+            );
+
+            state.result_aggregator.record_result(
+                goal_id,
+                crate::proto::common::TaskResult {
+                    task_id: task_id.to_string(),
+                    success: false,
+                    output_json: serde_json::to_vec(&tool_results).unwrap_or_default(),
+                    error: error_msg,
+                    duration_ms: 0,
+                    tokens_used: result.tokens_used,
+                    model_used: result.model_used.clone(),
+                },
+            );
+
+            state.decision_logger.log_decision(
+                "ai_execution",
+                &[task_id.to_string()],
+                "failed",
+                &format!(
+                    "Task '{}' failed during tool execution",
+                    task_description
+                ),
+                intelligence_level,
+                "ai",
+            );
+
+            warn!("Task {task_id} failed during tool execution");
+            return;
+        }
+
+        // All tools succeeded — build combined output
         serde_json::to_vec(&serde_json::json!({
             "ai_response": result.response_text,
-            "tool_calls_queued": tool_names,
+            "tool_results": tool_results,
             "model_used": result.model_used,
         }))
         .unwrap_or_else(|_| b"{}".to_vec())
     };
+
+    // Add completion message to goal
+    state.goal_engine.add_message(
+        goal_id,
+        "system",
+        &format!("Task completed: {task_description}"),
+    );
 
     // Mark task complete in both planners
     state.task_planner.complete_task(task_id, output.clone());

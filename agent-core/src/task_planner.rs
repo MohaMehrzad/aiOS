@@ -387,6 +387,28 @@ impl TaskPlanner {
         }
     }
 
+    /// Mark a task as in-progress
+    pub fn mark_in_progress(&mut self, task_id: &str) {
+        if let Some(task) = self.pending_tasks.get_mut(task_id) {
+            task.status = "in_progress".to_string();
+            task.started_at = chrono::Utc::now().timestamp();
+        }
+    }
+
+    /// Mark a task as awaiting user input
+    pub fn mark_awaiting_input(&mut self, task_id: &str) {
+        if let Some(task) = self.pending_tasks.get_mut(task_id) {
+            task.status = "awaiting_input".to_string();
+        }
+    }
+
+    /// Resume a task that was awaiting input (re-queue as pending)
+    pub fn resume_task(&mut self, task_id: &str) {
+        if let Some(task) = self.pending_tasks.get_mut(task_id) {
+            task.status = "pending".to_string();
+        }
+    }
+
     /// Mark a task as failed
     pub fn fail_task(&mut self, task_id: &str, error: &str) {
         if let Some(task) = self.pending_tasks.get_mut(task_id) {
