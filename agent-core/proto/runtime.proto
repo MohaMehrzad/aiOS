@@ -1,0 +1,62 @@
+syntax = "proto3";
+package aios.runtime;
+
+import "common.proto";
+
+service AIRuntime {
+    rpc LoadModel(LoadModelRequest) returns (ModelStatus);
+    rpc UnloadModel(UnloadModelRequest) returns (aios.common.Status);
+    rpc ListModels(aios.common.Empty) returns (ModelList);
+    rpc Infer(InferRequest) returns (InferResponse);
+    rpc StreamInfer(InferRequest) returns (stream InferChunk);
+    rpc HealthCheck(aios.common.Empty) returns (aios.common.HealthStatus);
+}
+
+message LoadModelRequest {
+    string model_name = 1;
+    string model_path = 2;
+    int32 context_length = 3;
+    int32 gpu_layers = 4;
+    int32 threads = 5;
+    int32 port = 6;
+}
+
+message UnloadModelRequest {
+    string model_name = 1;
+}
+
+message ModelStatus {
+    string model_name = 1;
+    string status = 2;
+    int32 port = 3;
+    int64 loaded_at = 4;
+    int64 last_used = 5;
+    int64 request_count = 6;
+}
+
+message ModelList {
+    repeated ModelStatus models = 1;
+}
+
+message InferRequest {
+    string model = 1;
+    string prompt = 2;
+    string system_prompt = 3;
+    int32 max_tokens = 4;
+    float temperature = 5;
+    string intelligence_level = 6;
+    string requesting_agent = 7;
+    string task_id = 8;
+}
+
+message InferResponse {
+    string text = 1;
+    int32 tokens_used = 2;
+    int64 latency_ms = 3;
+    string model_used = 4;
+}
+
+message InferChunk {
+    string text = 1;
+    bool done = 2;
+}

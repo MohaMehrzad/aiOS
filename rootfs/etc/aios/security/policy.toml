@@ -1,0 +1,239 @@
+# aiOS Security Policy
+# Governs capability enforcement, audit logging, rate limiting, and
+# confirmation requirements for all agent operations.
+
+# --------------------------------------------------------------------------
+# Capability Enforcement
+# --------------------------------------------------------------------------
+
+[capabilities]
+enforcement_mode = "strict"
+deny_unlisted_tools = true
+log_capability_checks = true
+allow_capability_delegation = false
+
+[capabilities.escalation]
+enabled = false
+require_operator_approval = true
+max_escalation_level = 1
+escalation_timeout_seconds = 300
+
+[capabilities.namespace_rules]
+# Each rule defines access control for a tool namespace.
+# "agents" lists which agent types may use tools in this namespace.
+# "confirmation_required" triggers operator approval before execution.
+
+[capabilities.namespace_rules."fs.read"]
+agents = ["system", "task", "security", "package", "storage", "monitoring", "learning"]
+confirmation_required = false
+
+[capabilities.namespace_rules."fs.write"]
+agents = ["task", "storage"]
+confirmation_required = false
+
+[capabilities.namespace_rules."fs.delete"]
+agents = ["task", "storage"]
+confirmation_required = true
+
+[capabilities.namespace_rules."fs.permissions"]
+agents = ["task", "storage"]
+confirmation_required = true
+
+[capabilities.namespace_rules."process.start"]
+agents = ["task"]
+confirmation_required = false
+
+[capabilities.namespace_rules."process.stop"]
+agents = ["task"]
+confirmation_required = true
+
+[capabilities.namespace_rules."process.signal"]
+agents = ["task"]
+confirmation_required = true
+
+[capabilities.namespace_rules."service.start"]
+agents = ["system"]
+confirmation_required = false
+
+[capabilities.namespace_rules."service.stop"]
+agents = ["system"]
+confirmation_required = true
+
+[capabilities.namespace_rules."service.restart"]
+agents = ["system"]
+confirmation_required = true
+
+[capabilities.namespace_rules."pkg.install"]
+agents = ["package"]
+confirmation_required = true
+
+[capabilities.namespace_rules."pkg.remove"]
+agents = ["package"]
+confirmation_required = true
+
+[capabilities.namespace_rules."pkg.upgrade"]
+agents = ["package"]
+confirmation_required = true
+
+[capabilities.namespace_rules."firewall.add"]
+agents = ["network"]
+confirmation_required = true
+
+[capabilities.namespace_rules."firewall.remove"]
+agents = ["network"]
+confirmation_required = true
+
+[capabilities.namespace_rules."sec.apparmor.reload"]
+agents = ["security"]
+confirmation_required = true
+
+[capabilities.namespace_rules."net.route.add"]
+agents = ["network"]
+confirmation_required = true
+
+[capabilities.namespace_rules."net.route.delete"]
+agents = ["network"]
+confirmation_required = true
+
+[capabilities.namespace_rules."net.config.set"]
+agents = ["network"]
+confirmation_required = true
+
+[capabilities.namespace_rules."fs.mount.mount"]
+agents = ["storage"]
+confirmation_required = true
+
+[capabilities.namespace_rules."fs.mount.umount"]
+agents = ["storage"]
+confirmation_required = true
+
+# --------------------------------------------------------------------------
+# Audit Policy
+# --------------------------------------------------------------------------
+
+[audit]
+enabled = true
+log_path = "/var/log/aios/audit.log"
+max_log_size_mb = 100
+max_log_files = 10
+rotation_policy = "size"
+format = "json"
+
+[audit.events]
+# Which categories of events to record in the audit log.
+tool_execution = true
+capability_checks = true
+capability_denials = true
+agent_lifecycle = true
+task_creation = true
+task_completion = true
+authentication = true
+configuration_changes = true
+firewall_changes = true
+policy_violations = true
+escalation_requests = true
+operator_confirmations = true
+service_state_changes = true
+error_events = true
+
+[audit.detail_levels]
+# Control verbosity per event type. Options: "minimal", "standard", "verbose".
+tool_execution = "standard"
+capability_denials = "verbose"
+policy_violations = "verbose"
+firewall_changes = "verbose"
+configuration_changes = "verbose"
+agent_lifecycle = "standard"
+task_creation = "minimal"
+task_completion = "standard"
+authentication = "verbose"
+error_events = "verbose"
+
+[audit.sensitive_fields]
+# Fields to redact from audit log entries.
+redact = ["password", "token", "secret", "api_key", "private_key", "credential"]
+
+# --------------------------------------------------------------------------
+# Rate Limits
+# --------------------------------------------------------------------------
+
+[rate_limits]
+enabled = true
+window_seconds = 60
+enforcement = "reject"
+
+[rate_limits.global]
+max_tool_calls_per_minute = 300
+max_write_operations_per_minute = 60
+max_destructive_operations_per_minute = 10
+max_network_operations_per_minute = 120
+
+[rate_limits.per_agent]
+max_tool_calls_per_minute = 60
+max_write_operations_per_minute = 20
+max_destructive_operations_per_minute = 5
+max_network_operations_per_minute = 30
+
+[rate_limits.per_tool]
+# Override limits for specific high-impact tools.
+"pkg.install" = { max_per_minute = 5, cooldown_seconds = 10 }
+"pkg.remove" = { max_per_minute = 3, cooldown_seconds = 15 }
+"pkg.upgrade" = { max_per_minute = 2, cooldown_seconds = 30 }
+"fs.delete" = { max_per_minute = 10, cooldown_seconds = 5 }
+"process.signal" = { max_per_minute = 10, cooldown_seconds = 2 }
+"service.restart" = { max_per_minute = 5, cooldown_seconds = 10 }
+"firewall.add" = { max_per_minute = 10, cooldown_seconds = 5 }
+"firewall.remove" = { max_per_minute = 5, cooldown_seconds = 10 }
+"sec.apparmor.reload" = { max_per_minute = 2, cooldown_seconds = 30 }
+"net.route.add" = { max_per_minute = 5, cooldown_seconds = 5 }
+"net.route.delete" = { max_per_minute = 3, cooldown_seconds = 10 }
+"net.config.set" = { max_per_minute = 5, cooldown_seconds = 5 }
+
+# --------------------------------------------------------------------------
+# Confirmation Requirements
+# --------------------------------------------------------------------------
+
+[confirmation]
+enabled = true
+timeout_seconds = 120
+default_on_timeout = "deny"
+max_pending_confirmations = 5
+
+[confirmation.destructive_operations]
+# Operations classified as destructive always require operator confirmation.
+patterns = [
+    "fs.delete",
+    "fs.permissions",
+    "process.stop",
+    "process.signal",
+    "service.stop",
+    "service.restart",
+    "service.disable",
+    "pkg.install",
+    "pkg.remove",
+    "pkg.upgrade",
+    "pkg.autoremove",
+    "firewall.add",
+    "firewall.remove",
+    "firewall.disable",
+    "sec.apparmor.reload",
+    "net.route.add",
+    "net.route.delete",
+    "net.config.set",
+    "fs.mount.mount",
+    "fs.mount.umount",
+    "fs.lvm.create",
+]
+
+[confirmation.bypass_conditions]
+# Conditions under which confirmation may be skipped.
+# These are checked in order; first match applies.
+auto_approve_read_only = true
+auto_approve_monitoring = true
+auto_approve_from_operator_session = false
+
+[confirmation.notification]
+method = "console"
+include_command_preview = true
+include_risk_assessment = true
+include_rollback_info = true

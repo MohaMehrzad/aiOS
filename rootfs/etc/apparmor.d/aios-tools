@@ -1,0 +1,155 @@
+# AppArmor profile for the aiOS Tools Service
+# This profile governs the tools execution service that runs system commands
+# and file operations on behalf of agents. It has broad read access but
+# carefully restricted write access.
+
+#include <tunables/global>
+
+profile aios-tools /usr/sbin/aios-tools {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  # Executable
+  /usr/sbin/aios-tools                         mr,
+
+  # Shared libraries
+  /usr/lib/aios/*.so                           mr,
+  /usr/lib/aios/tools/*.so                     mr,
+
+  # System binaries the tools service may invoke (read/execute only)
+  /usr/bin/ls                                  rix,
+  /usr/bin/cat                                 rix,
+  /usr/bin/df                                  rix,
+  /usr/bin/du                                  rix,
+  /usr/bin/free                                rix,
+  /usr/bin/ps                                  rix,
+  /usr/bin/top                                 rix,
+  /usr/bin/uptime                              rix,
+  /usr/bin/whoami                              rix,
+  /usr/bin/id                                  rix,
+  /usr/bin/uname                               rix,
+  /usr/bin/hostname                            rix,
+  /usr/bin/stat                                rix,
+  /usr/bin/file                                rix,
+  /usr/bin/find                                rix,
+  /usr/bin/grep                                rix,
+  /usr/bin/head                                rix,
+  /usr/bin/tail                                rix,
+  /usr/bin/wc                                  rix,
+  /usr/bin/sort                                rix,
+  /usr/bin/cut                                 rix,
+  /usr/bin/awk                                 rix,
+  /usr/bin/sed                                 rix,
+  /usr/bin/systemctl                           rix,
+  /usr/bin/journalctl                          rix,
+  /usr/bin/ip                                  rix,
+  /usr/bin/ss                                  rix,
+  /usr/bin/netstat                             rix,
+  /usr/sbin/iptables                           rix,
+  /usr/sbin/nft                                rix,
+  /usr/bin/apt                                 rix,
+  /usr/bin/dpkg                                rix,
+  /usr/bin/dpkg-query                          rix,
+
+  # Configuration: read-only
+  /etc/aios/**                                 r,
+  /etc/ssl/certs/**                            r,
+  /etc/resolv.conf                             r,
+  /etc/hosts                                   r,
+  /etc/nsswitch.conf                           r,
+  /etc/localtime                               r,
+  /etc/ld.so.cache                             r,
+  /etc/passwd                                  r,
+  /etc/group                                   r,
+  /etc/fstab                                   r,
+  /etc/os-release                              r,
+  /etc/hostname                                r,
+  /etc/machine-id                              r,
+  /etc/systemd/**                              r,
+  /etc/apt/**                                  r,
+  /etc/network/**                              r,
+  /etc/netplan/**                              r,
+  /etc/sysctl.conf                             r,
+  /etc/sysctl.d/**                             r,
+  /etc/cron.d/**                               r,
+  /etc/crontab                                 r,
+  /etc/logrotate.conf                          r,
+  /etc/logrotate.d/**                          r,
+
+  # Proc filesystem: broad read access for system monitoring
+  /proc/**                                     r,
+  @{PROC}/@{pid}/status                        r,
+  @{PROC}/@{pid}/stat                          r,
+  @{PROC}/@{pid}/cmdline                       r,
+  @{PROC}/@{pid}/fd/                           r,
+  @{PROC}/@{pid}/maps                          r,
+  @{PROC}/@{pid}/net/**                        r,
+  @{PROC}/meminfo                              r,
+  @{PROC}/cpuinfo                              r,
+  @{PROC}/loadavg                              r,
+  @{PROC}/uptime                               r,
+  @{PROC}/version                              r,
+  @{PROC}/diskstats                            r,
+  @{PROC}/mounts                               r,
+  @{PROC}/filesystems                          r,
+  @{PROC}/sys/kernel/hostname                  r,
+  @{PROC}/sys/net/**                           r,
+
+  # Sysfs: read access for hardware and device information
+  /sys/**                                      r,
+  /sys/class/net/**                            r,
+  /sys/class/block/**                          r,
+  /sys/class/thermal/**                        r,
+  /sys/devices/system/cpu/**                   r,
+  /sys/fs/cgroup/**                            r,
+
+  # State and data: restricted write access
+  /var/lib/aios/**                             rw,
+  /var/lib/aios/tools/                         rw,
+  /var/lib/aios/tools/**                       rw,
+  /var/lib/aios/tasks/**                       rw,
+  /var/lib/aios/scratch/**                     rw,
+
+  # Logging: append-only pattern
+  /var/log/aios/tools.log                      w,
+  /var/log/aios/tools.log.*                    w,
+  /var/log/aios/tool-exec.log                  w,
+
+  # Runtime
+  /run/aios/tools.pid                          rw,
+  /run/aios/tools.sock                         rw,
+
+  # Temporary files
+  /tmp/aios-tools-*                            rw,
+
+  # Network: Unix socket only for IPC with orchestrator
+  network unix,
+
+  # Deny direct outbound networking (tools should not reach the internet)
+  deny network tcp,
+  deny network udp,
+  deny network raw,
+  deny network packet,
+
+  # Deny mount operations
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # Deny ptrace
+  deny ptrace,
+
+  # Write restrictions: deny writes to critical system paths
+  deny /usr/**                                 w,
+  deny /etc/**                                 w,
+  deny /boot/**                                rwx,
+  deny /root/**                                rwx,
+  deny /home/**                                w,
+  deny /var/log/**                             w,
+  # (re-allow our own logs above via explicit grant)
+
+  # Signal handling
+  signal (receive) peer=aios-orchestrator,
+  signal (send) set=(term, kill) peer=aios-tools,
+  signal (receive),
+}

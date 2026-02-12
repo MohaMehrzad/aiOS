@@ -1,0 +1,32 @@
+[agent]
+name = "PackageAgent"
+type = "package"
+description = "Manages system packages including installation, removal, updates, and dependency resolution. Queries package metadata, checks for available upgrades, and maintains a consistent package state across the system."
+
+[capabilities]
+tools = [
+    "pkg.list",
+    "pkg.info",
+    "pkg.search",
+    "pkg.install",
+    "pkg.remove",
+    "pkg.update",
+    "pkg.upgrade",
+    "pkg.autoremove",
+    "pkg.history",
+    "pkg.dependencies",
+    "pkg.files",
+    "pkg.verify",
+    "pkg.hold",
+    "pkg.unhold",
+    "fs.read",
+]
+
+[limits]
+max_memory_mb = 384
+max_cpu_percent = 30
+max_tasks = 4
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid"]

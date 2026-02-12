@@ -1,0 +1,30 @@
+[agent]
+name = "LearningAgent"
+type = "learning"
+description = "Observes system patterns, operator behavior, and task outcomes to build predictive models and improve automation. Learns from monitoring data to suggest optimizations, detect anomalies, and refine agent decision-making over time."
+
+[capabilities]
+tools = [
+    "monitor.cpu",
+    "monitor.memory",
+    "monitor.disk",
+    "monitor.network",
+    "monitor.uptime",
+    "monitor.load",
+    "monitor.temperature",
+    "monitor.processes",
+    "monitor.metrics.query",
+    "monitor.metrics.export",
+    "monitor.alerts.list",
+    "monitor.thresholds.get",
+    "fs.read",
+]
+
+[limits]
+max_memory_mb = 512
+max_cpu_percent = 20
+max_tasks = 4
+
+[intelligence]
+default_level = "hybrid"
+allowed_levels = ["local", "hybrid", "cloud"]

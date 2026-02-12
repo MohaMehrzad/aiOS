@@ -1,0 +1,37 @@
+[agent]
+name = "NetworkAgent"
+type = "network"
+description = "Manages network interfaces, routing, DNS configuration, and firewall rules. Provides network diagnostics and enforces connectivity policies. Responsible for all network-layer configuration changes."
+
+[capabilities]
+tools = [
+    "net.ping",
+    "net.dns",
+    "net.curl",
+    "net.ports",
+    "net.connections",
+    "net.interfaces",
+    "net.traceroute",
+    "net.route.list",
+    "net.route.add",
+    "net.route.delete",
+    "net.config.get",
+    "net.config.set",
+    "net.bandwidth",
+    "firewall.list",
+    "firewall.add",
+    "firewall.remove",
+    "firewall.enable",
+    "firewall.disable",
+    "firewall.status",
+    "firewall.reload",
+]
+
+[limits]
+max_memory_mb = 256
+max_cpu_percent = 10
+max_tasks = 6
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid"]

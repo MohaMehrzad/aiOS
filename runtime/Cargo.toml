@@ -1,0 +1,28 @@
+[package]
+name = "aios-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "aiOS AI Runtime — local model management via llama.cpp"
+
+[[bin]]
+name = "aios-runtime"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }
+tokio-stream = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+tonic-build = { workspace = true }

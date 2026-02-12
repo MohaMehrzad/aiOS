@@ -1,0 +1,36 @@
+[agent]
+name = "MonitoringAgent"
+type = "monitoring"
+description = "Continuous background agent that collects system telemetry, maintains metric histories, triggers alerts on threshold breaches, and generates health reports. Provides the observability layer for all other agents."
+
+[capabilities]
+tools = [
+    "monitor.cpu",
+    "monitor.memory",
+    "monitor.disk",
+    "monitor.network",
+    "monitor.uptime",
+    "monitor.load",
+    "monitor.temperature",
+    "monitor.processes",
+    "monitor.alerts.list",
+    "monitor.alerts.create",
+    "monitor.alerts.delete",
+    "monitor.alerts.acknowledge",
+    "monitor.metrics.query",
+    "monitor.metrics.export",
+    "monitor.report.generate",
+    "monitor.thresholds.get",
+    "monitor.thresholds.set",
+    "fs.read",
+    "process.list",
+]
+
+[limits]
+max_memory_mb = 384
+max_cpu_percent = 15
+max_tasks = 10
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid"]

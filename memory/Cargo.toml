@@ -1,0 +1,27 @@
+[package]
+name = "aios-memory"
+version = "0.1.0"
+edition = "2021"
+description = "aiOS three-tier memory system"
+
+[[bin]]
+name = "aios-memory"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

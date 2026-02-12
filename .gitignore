@@ -1,0 +1,58 @@
+# Build output
+build/output/
+build/qemu/
+build/initramfs/
+build/rootfs/
+build/iso-staging/
+iso/
+
+# Kernel source (downloaded, not checked in)
+kernel/src/linux-*/
+
+# AI Models (too large for git)
+build/models/
+*.gguf
+
+# Rust
+target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# Dependencies
+build/deps/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (NEVER commit)
+*.env
+secrets.enc
+secrets.env
+*.key
+*.pem
+
+# PoK (local index)
+.pok/
+
+# Runtime data
+*.db
+*.sqlite
+*.log

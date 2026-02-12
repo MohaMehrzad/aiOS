@@ -1,0 +1,38 @@
+[agent]
+name = "TaskAgent"
+type = "task"
+description = "General-purpose task execution agent that handles file operations, process management, and network diagnostics. Serves as the primary workhorse for user-initiated commands and multi-step automation workflows."
+
+[capabilities]
+tools = [
+    "fs.read",
+    "fs.write",
+    "fs.delete",
+    "fs.move",
+    "fs.copy",
+    "fs.list",
+    "fs.search",
+    "fs.permissions",
+    "fs.stat",
+    "process.list",
+    "process.start",
+    "process.stop",
+    "process.signal",
+    "process.info",
+    "net.ping",
+    "net.dns",
+    "net.curl",
+    "net.ports",
+    "net.connections",
+    "net.interfaces",
+    "net.traceroute",
+]
+
+[limits]
+max_memory_mb = 512
+max_cpu_percent = 25
+max_tasks = 12
+
+[intelligence]
+default_level = "hybrid"
+allowed_levels = ["local", "hybrid", "cloud"]

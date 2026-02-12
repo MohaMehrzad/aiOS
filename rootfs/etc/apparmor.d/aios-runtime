@@ -1,0 +1,78 @@
+# AppArmor profile for aios-runtime
+# The AI Runtime service manages local LLM inference via llama.cpp.
+# It spawns and monitors llama-server processes and proxies inference requests.
+
+#include <tunables/global>
+
+profile aios-runtime /usr/sbin/aios-runtime flags=(enforce) {
+  #include <abstractions/base>
+
+  # -----------------------------------------------------------------------
+  # Capabilities
+  # -----------------------------------------------------------------------
+  # May need to set process priority for inference threads
+  capability sys_nice,
+
+  # -----------------------------------------------------------------------
+  # Network access
+  # -----------------------------------------------------------------------
+  # gRPC server on port 50055
+  network tcp,
+  # Loopback HTTP to llama-server instances (ports 8080+)
+  network inet stream,
+  network inet6 stream,
+  # Unix domain sockets for IPC
+  network unix stream,
+  # Deny raw and packet sockets
+  deny network raw,
+  deny network packet,
+
+  # -----------------------------------------------------------------------
+  # Filesystem access
+  # -----------------------------------------------------------------------
+  # Own binary
+  /usr/sbin/aios-runtime               mr,
+
+  # Spawn llama-server processes
+  /usr/local/bin/llama-server           rix,
+  /usr/bin/llama-server                 rix,
+
+  # Model files — read-only access to model directory
+  /var/lib/aios/models/                 r,
+  /var/lib/aios/models/**               r,
+
+  # Runtime state
+  /var/lib/aios/runtime/                rw,
+  /var/lib/aios/runtime/**              rw,
+
+  # Logs
+  /var/log/aios/runtime.log             rw,
+  /var/log/aios/runtime.log.*           rw,
+  /var/log/aios/                        r,
+
+  # Temporary files for inference
+  /tmp/aios-runtime-*                   rw,
+
+  # Read configuration
+  /etc/aios/config.toml                 r,
+  /etc/aios/**                          r,
+
+  # Proc access (own process info, CPU info for thread allocation)
+  /proc/self/**                         r,
+  /proc/cpuinfo                         r,
+  /proc/meminfo                         r,
+
+  # System libraries
+  /usr/lib/**                           mr,
+  /lib/**                               mr,
+
+  # -----------------------------------------------------------------------
+  # Deny rules
+  # -----------------------------------------------------------------------
+  deny /etc/shadow                      rwx,
+  deny /etc/passwd                      w,
+  deny /etc/apparmor.d/**               w,
+  deny /var/lib/aios/memory/**          rwx,
+  deny /var/lib/aios/vectors/**         rwx,
+  deny /var/lib/aios/ledger/**          rwx,
+}

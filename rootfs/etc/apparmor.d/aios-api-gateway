@@ -1,0 +1,92 @@
+# AppArmor profile for the aiOS API Gateway
+# This profile governs the external-facing API gateway that handles inbound
+# requests and proxies them to internal services. Outbound TCP is restricted
+# to port 443 only (HTTPS for LLM API calls and external webhooks).
+
+#include <tunables/global>
+
+profile aios-api-gateway /usr/sbin/aios-api-gateway {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/ssl_certs>
+
+  # Executable
+  /usr/sbin/aios-api-gateway                   mr,
+
+  # Shared libraries
+  /usr/lib/aios/*.so                           mr,
+  /usr/lib/aios/gateway/*.so                   mr,
+
+  # Configuration: read-only
+  /etc/aios/**                                 r,
+  /etc/aios/gateway.toml                       r,
+  /etc/aios/security/**                        r,
+  /etc/ssl/certs/**                            r,
+  /etc/ssl/private/aios-*.pem                  r,
+  /etc/ssl/openssl.cnf                         r,
+  /etc/resolv.conf                             r,
+  /etc/hosts                                   r,
+  /etc/nsswitch.conf                           r,
+  /etc/localtime                               r,
+  /etc/ld.so.cache                             r,
+
+  # Cache directory: read/write for response caching and rate limit state
+  /var/lib/aios/cache/                         rw,
+  /var/lib/aios/cache/**                       rwk,
+  /var/lib/aios/cache/responses/               rw,
+  /var/lib/aios/cache/responses/**             rwk,
+  /var/lib/aios/cache/sessions/                rw,
+  /var/lib/aios/cache/sessions/**              rwk,
+  /var/lib/aios/cache/ratelimit/               rw,
+  /var/lib/aios/cache/ratelimit/**             rwk,
+
+  # Logging
+  /var/log/aios/api-gateway.log                w,
+  /var/log/aios/api-gateway.log.*              w,
+  /var/log/aios/api-access.log                 w,
+  /var/log/aios/api-access.log.*               w,
+
+  # Runtime
+  /run/aios/api-gateway.pid                    rw,
+  /run/aios/api-gateway.sock                   rw,
+
+  # Temporary files
+  /tmp/aios-gateway-*                          rw,
+
+  # Proc: minimal
+  @{PROC}/@{pid}/status                        r,
+  @{PROC}/@{pid}/fd/                           r,
+
+  # Network: TCP for serving API and outbound HTTPS
+  network tcp,
+  network unix,
+
+  # DNS resolution
+  network udp,
+
+  # Deny raw and packet sockets
+  deny network raw,
+  deny network packet,
+
+  # Deny mount operations
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # Deny ptrace
+  deny ptrace,
+
+  # Deny writes to system paths
+  deny /usr/**                                 w,
+  deny /etc/**                                 w,
+  deny /boot/**                                rwx,
+  deny /sys/**                                 w,
+  deny /root/**                                rwx,
+  deny /home/**                                rwx,
+  deny /var/lib/aios/memory/**                 rwx,
+  deny /var/lib/aios/vectors/**                rwx,
+
+  # Signal handling
+  signal (receive) peer=aios-orchestrator,
+  signal (receive),
+}

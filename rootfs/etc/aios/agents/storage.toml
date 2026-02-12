@@ -1,0 +1,36 @@
+[agent]
+name = "StorageAgent"
+type = "storage"
+description = "Manages filesystems, disk partitions, mount points, and storage health. Monitors disk utilization, performs cleanup operations, and handles storage provisioning. Ensures data integrity through periodic checks."
+
+[capabilities]
+tools = [
+    "fs.read",
+    "fs.write",
+    "fs.delete",
+    "fs.move",
+    "fs.copy",
+    "fs.list",
+    "fs.search",
+    "fs.permissions",
+    "fs.stat",
+    "fs.mount.list",
+    "fs.mount.mount",
+    "fs.mount.umount",
+    "fs.disk.list",
+    "fs.disk.usage",
+    "fs.disk.smart",
+    "fs.lvm.list",
+    "fs.lvm.create",
+    "fs.cleanup",
+    "monitor.disk",
+]
+
+[limits]
+max_memory_mb = 256
+max_cpu_percent = 20
+max_tasks = 6
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid"]

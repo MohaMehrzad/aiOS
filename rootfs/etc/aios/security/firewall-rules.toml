@@ -1,0 +1,170 @@
+# aiOS Firewall Rules
+# Applied by the orchestrator at boot and reloaded on configuration change.
+# Rules are evaluated in order; first match wins within each chain.
+
+[defaults]
+input_policy = "drop"
+forward_policy = "drop"
+output_policy = "drop"
+
+# --------------------------------------------------------------------------
+# INPUT chain
+# --------------------------------------------------------------------------
+
+[[input]]
+name = "allow-established"
+description = "Allow packets belonging to established or related connections"
+action = "accept"
+state = ["established", "related"]
+protocol = "all"
+
+[[input]]
+name = "allow-loopback"
+description = "Allow all traffic on the loopback interface"
+action = "accept"
+interface = "lo"
+protocol = "all"
+
+[[input]]
+name = "drop-invalid-loopback"
+description = "Drop traffic claiming loopback source on non-loopback interfaces"
+action = "drop"
+source = "127.0.0.0/8"
+interface = "!lo"
+protocol = "all"
+
+[[input]]
+name = "allow-management-console"
+description = "Allow access to the web management console from LAN"
+action = "accept"
+protocol = "tcp"
+destination_port = 9090
+source = "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
+
+[[input]]
+name = "allow-grpc-orchestrator"
+description = "Allow gRPC connections to the orchestrator on localhost only"
+action = "accept"
+protocol = "tcp"
+destination_port = 50051
+source = "127.0.0.1/32"
+
+[[input]]
+name = "allow-grpc-tools"
+description = "Allow gRPC connections to the tools service on localhost only"
+action = "accept"
+protocol = "tcp"
+destination_port = 50052
+source = "127.0.0.1/32"
+
+[[input]]
+name = "allow-grpc-memory"
+description = "Allow gRPC connections to the memory service on localhost only"
+action = "accept"
+protocol = "tcp"
+destination_port = 50053
+source = "127.0.0.1/32"
+
+[[input]]
+name = "allow-grpc-gateway"
+description = "Allow gRPC connections to the API gateway on localhost only"
+action = "accept"
+protocol = "tcp"
+destination_port = 50054
+source = "127.0.0.1/32"
+
+[[input]]
+name = "allow-icmp-echo"
+description = "Allow ICMP echo requests for basic connectivity testing"
+action = "accept"
+protocol = "icmp"
+icmp_type = "echo-request"
+rate_limit = "5/second"
+
+[[input]]
+name = "drop-all-input"
+description = "Final rule: drop everything else"
+action = "drop"
+protocol = "all"
+log = true
+log_prefix = "aios-fw-input-drop"
+
+# --------------------------------------------------------------------------
+# OUTPUT chain
+# --------------------------------------------------------------------------
+
+[[output]]
+name = "allow-established-out"
+description = "Allow packets belonging to established or related connections"
+action = "accept"
+state = ["established", "related"]
+protocol = "all"
+
+[[output]]
+name = "allow-loopback-out"
+description = "Allow all traffic on the loopback interface"
+action = "accept"
+interface = "lo"
+protocol = "all"
+
+[[output]]
+name = "allow-https-out"
+description = "Allow outbound HTTPS for LLM API calls and package downloads"
+action = "accept"
+protocol = "tcp"
+destination_port = 443
+
+[[output]]
+name = "allow-dns-udp"
+description = "Allow outbound DNS queries over UDP"
+action = "accept"
+protocol = "udp"
+destination_port = 53
+
+[[output]]
+name = "allow-dns-tcp"
+description = "Allow outbound DNS queries over TCP (for large responses)"
+action = "accept"
+protocol = "tcp"
+destination_port = 53
+
+[[output]]
+name = "allow-dot"
+description = "Allow DNS-over-TLS for encrypted name resolution"
+action = "accept"
+protocol = "tcp"
+destination_port = 853
+
+[[output]]
+name = "allow-ntp"
+description = "Allow NTP for time synchronization"
+action = "accept"
+protocol = "udp"
+destination_port = 123
+
+[[output]]
+name = "allow-icmp-echo-out"
+description = "Allow outbound ICMP echo for network diagnostics"
+action = "accept"
+protocol = "icmp"
+icmp_type = "echo-request"
+
+[[output]]
+name = "drop-all-output"
+description = "Final rule: drop everything else"
+action = "drop"
+protocol = "all"
+log = true
+log_prefix = "aios-fw-output-drop"
+
+# --------------------------------------------------------------------------
+# FORWARD chain
+# --------------------------------------------------------------------------
+
+[[forward]]
+name = "drop-all-forward"
+description = "No forwarding allowed; this is not a router"
+action = "drop"
+protocol = "all"
+log = true
+log_prefix = "aios-fw-forward-drop"

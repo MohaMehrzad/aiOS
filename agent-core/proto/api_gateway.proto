@@ -1,0 +1,61 @@
+syntax = "proto3";
+package aios.api_gateway;
+
+import "common.proto";
+
+service ApiGateway {
+    rpc Infer(ApiInferRequest) returns (aios.common.InferenceResponse);
+    rpc StreamInfer(ApiInferRequest) returns (stream StreamChunk);
+    rpc GetBudget(aios.common.Empty) returns (BudgetStatus);
+    rpc GetUsage(UsageRequest) returns (UsageResponse);
+}
+
+message ApiInferRequest {
+    string prompt = 1;
+    string system_prompt = 2;
+    int32 max_tokens = 3;
+    float temperature = 4;
+    string preferred_provider = 5;
+    string requesting_agent = 6;
+    string task_id = 7;
+    bool allow_fallback = 8;
+}
+
+message StreamChunk {
+    string text = 1;
+    bool done = 2;
+    string provider = 3;
+}
+
+message BudgetStatus {
+    double claude_monthly_budget_usd = 1;
+    double claude_used_usd = 2;
+    double openai_monthly_budget_usd = 3;
+    double openai_used_usd = 4;
+    int32 days_remaining = 5;
+    double daily_rate_usd = 6;
+    bool budget_exceeded = 7;
+}
+
+message UsageRequest {
+    string provider = 1;
+    int32 days = 2;
+}
+
+message UsageResponse {
+    repeated UsageRecord records = 1;
+    double total_cost_usd = 2;
+    int32 total_requests = 3;
+    int32 total_tokens = 4;
+}
+
+message UsageRecord {
+    string provider = 1;
+    string model = 2;
+    int32 input_tokens = 3;
+    int32 output_tokens = 4;
+    double cost_usd = 5;
+    int64 timestamp = 6;
+    string requesting_agent = 7;
+    string task_id = 8;
+}

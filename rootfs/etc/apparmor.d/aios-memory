@@ -1,0 +1,89 @@
+# AppArmor profile for the aiOS Memory Service
+# This profile governs the memory and vector storage service that manages
+# agent knowledge bases, conversation history, and semantic embeddings.
+# Network access is denied except for Unix domain sockets used for IPC.
+
+#include <tunables/global>
+
+profile aios-memory /usr/sbin/aios-memory {
+  #include <abstractions/base>
+
+  # Executable
+  /usr/sbin/aios-memory                        mr,
+
+  # Shared libraries
+  /usr/lib/aios/*.so                           mr,
+  /usr/lib/aios/memory/*.so                    mr,
+
+  # Configuration: read-only
+  /etc/aios/**                                 r,
+  /etc/aios/memory.toml                        r,
+  /etc/localtime                               r,
+  /etc/ld.so.cache                             r,
+
+  # Memory storage: full read/write for knowledge management
+  /var/lib/aios/memory/                        rw,
+  /var/lib/aios/memory/**                      rwk,
+  /var/lib/aios/memory/conversations/          rw,
+  /var/lib/aios/memory/conversations/**        rwk,
+  /var/lib/aios/memory/knowledge/              rw,
+  /var/lib/aios/memory/knowledge/**            rwk,
+  /var/lib/aios/memory/context/                rw,
+  /var/lib/aios/memory/context/**              rwk,
+  /var/lib/aios/memory/snapshots/              rw,
+  /var/lib/aios/memory/snapshots/**            rwk,
+
+  # Vector storage: full read/write for embedding databases
+  /var/lib/aios/vectors/                       rw,
+  /var/lib/aios/vectors/**                     rwk,
+  /var/lib/aios/vectors/indices/               rw,
+  /var/lib/aios/vectors/indices/**             rwk,
+  /var/lib/aios/vectors/embeddings/            rw,
+  /var/lib/aios/vectors/embeddings/**          rwk,
+
+  # Logging
+  /var/log/aios/memory.log                     w,
+  /var/log/aios/memory.log.*                   w,
+
+  # Runtime
+  /run/aios/memory.pid                         rw,
+  /run/aios/memory.sock                        rw,
+
+  # Temporary files for atomic writes and compaction
+  /tmp/aios-memory-*                           rw,
+
+  # Proc: minimal access
+  @{PROC}/@{pid}/status                        r,
+  @{PROC}/@{pid}/fd/                           r,
+  @{PROC}/meminfo                              r,
+
+  # Unix sockets only: IPC with orchestrator and other services
+  network unix,
+
+  # Deny all non-Unix networking
+  deny network tcp,
+  deny network udp,
+  deny network raw,
+  deny network packet,
+  deny network netlink,
+
+  # Deny mount operations
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # Deny ptrace
+  deny ptrace,
+
+  # Deny writes to system paths
+  deny /usr/**                                 w,
+  deny /etc/**                                 w,
+  deny /boot/**                                rwx,
+  deny /sys/**                                 w,
+  deny /root/**                                rwx,
+  deny /home/**                                rwx,
+
+  # Signal handling
+  signal (receive) peer=aios-orchestrator,
+  signal (receive),
+}

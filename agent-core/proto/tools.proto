@@ -1,0 +1,90 @@
+syntax = "proto3";
+package aios.tools;
+
+service ToolRegistry {
+    // Discovery
+    rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+    rpc GetTool(GetToolRequest) returns (ToolDefinition);
+
+    // Execution
+    rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+    rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+    // Extension
+    rpc Register(RegisterToolRequest) returns (RegisterToolResponse);
+    rpc Deregister(DeregisterToolRequest) returns (Status);
+}
+
+message ListToolsRequest {
+    string namespace = 1;
+}
+
+message ListToolsResponse {
+    repeated ToolDefinition tools = 1;
+}
+
+message GetToolRequest {
+    string name = 1;
+}
+
+message ToolDefinition {
+    string name = 1;
+    string namespace = 2;
+    string version = 3;
+    string description = 4;
+    bytes input_schema = 5;
+    bytes output_schema = 6;
+    repeated string required_capabilities = 7;
+    string risk_level = 8;
+    bool requires_confirmation = 9;
+    bool idempotent = 10;
+    bool reversible = 11;
+    int32 timeout_ms = 12;
+    string rollback_tool = 13;
+}
+
+message ExecuteRequest {
+    string tool_name = 1;
+    string agent_id = 2;
+    string task_id = 3;
+    bytes input_json = 4;
+    string reason = 5;
+}
+
+message ExecuteResponse {
+    bool success = 1;
+    bytes output_json = 2;
+    string error = 3;
+    string execution_id = 4;
+    int64 duration_ms = 5;
+    string backup_id = 6;
+}
+
+message RollbackRequest {
+    string execution_id = 1;
+    string reason = 2;
+}
+
+message RollbackResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message RegisterToolRequest {
+    ToolDefinition tool = 1;
+    string handler_address = 2;
+}
+
+message RegisterToolResponse {
+    bool accepted = 1;
+    string error = 2;
+}
+
+message DeregisterToolRequest {
+    string tool_name = 1;
+}
+
+message Status {
+    bool success = 1;
+    string message = 2;
+}

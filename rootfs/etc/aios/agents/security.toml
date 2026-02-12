@@ -1,0 +1,34 @@
+[agent]
+name = "SecurityAgent"
+type = "security"
+description = "Monitors system security posture, audits access patterns, manages AppArmor profiles, and detects anomalous behavior. Reviews file integrity, user sessions, and capability violations. Enforces security policy compliance."
+
+[capabilities]
+tools = [
+    "sec.audit.log",
+    "sec.audit.search",
+    "sec.apparmor.status",
+    "sec.apparmor.reload",
+    "sec.apparmor.profiles",
+    "sec.capabilities.list",
+    "sec.capabilities.check",
+    "sec.users.list",
+    "sec.users.sessions",
+    "sec.integrity.check",
+    "sec.integrity.baseline",
+    "sec.cve.scan",
+    "sec.policy.check",
+    "sec.policy.violations",
+    "sec.firewall.audit",
+    "fs.read",
+    "process.list",
+]
+
+[limits]
+max_memory_mb = 384
+max_cpu_percent = 20
+max_tasks = 6
+
+[intelligence]
+default_level = "hybrid"
+allowed_levels = ["local", "hybrid", "cloud"]

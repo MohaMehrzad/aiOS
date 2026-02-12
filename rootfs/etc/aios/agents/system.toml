@@ -1,0 +1,35 @@
+[agent]
+name = "SystemAgent"
+type = "system"
+description = "Monitors system health, resource utilization, and service status. Provides real-time insights into CPU, memory, disk, and network metrics. Acts as the primary diagnostic agent for infrastructure concerns."
+
+[capabilities]
+tools = [
+    "fs.read",
+    "process.list",
+    "service.list",
+    "service.status",
+    "service.start",
+    "service.stop",
+    "service.restart",
+    "service.enable",
+    "service.disable",
+    "service.logs",
+    "monitor.cpu",
+    "monitor.memory",
+    "monitor.disk",
+    "monitor.network",
+    "monitor.uptime",
+    "monitor.load",
+    "monitor.temperature",
+    "monitor.processes",
+]
+
+[limits]
+max_memory_mb = 256
+max_cpu_percent = 15
+max_tasks = 8
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid", "cloud"]

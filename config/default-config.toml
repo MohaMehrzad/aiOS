@@ -1,0 +1,130 @@
+# aiOS Default Configuration
+# This file is installed at /etc/aios/config.toml on the target system.
+
+[system]
+hostname = "aios"
+log_level = "info"                    # debug, info, warn, error
+autonomy_level = "supervised"         # supervised, autonomous, manual
+
+[boot]
+init_timeout_seconds = 300
+debug_shell = false
+first_boot_setup = true
+services = [
+    "aios-memory",
+    "aios-tools",
+    "aios-orchestrator",
+    "aios-gateway",
+]
+
+[models]
+runtime = "llama-cpp"
+model_dir = "/var/lib/aios/models"
+operational_model = "tinyllama-1.1b-chat.Q4_K_M.gguf"
+tactical_model = "mistral-7b-instruct.Q4_K_M.gguf"
+auto_load_tactical = true
+idle_unload_minutes = 5
+
+[models.operational]
+name = "TinyLlama 1.1B"
+file = "tinyllama-1.1b-chat.Q4_K_M.gguf"
+context_size = 2048
+gpu_layers = 0
+threads = 4
+batch_size = 512
+
+[models.tactical]
+name = "Mistral 7B"
+file = "mistral-7b-instruct.Q4_K_M.gguf"
+context_size = 4096
+gpu_layers = 33
+threads = 8
+batch_size = 512
+
+[api_gateway]
+enabled = false
+claude_model = "claude-sonnet-4-5-20250929"
+openai_model = "gpt-4o"
+monthly_budget_usd_claude = 100.0
+monthly_budget_usd_openai = 50.0
+cache_responses = true
+cache_ttl_hours = 24
+
+[networking]
+dhcp_timeout = 30
+dns_servers = ["1.1.1.1", "8.8.8.8"]
+dns_over_tls = true
+firewall_default = "deny"
+allowed_outbound = [
+    "443/tcp",    # HTTPS
+    "53/udp",     # DNS
+    "53/tcp",     # DNS over TCP
+    "853/tcp",    # DNS over TLS
+    "123/udp",    # NTP
+]
+
+[security]
+capabilities_strict = true
+audit_ledger = true
+apparmor_enforce = true
+secrets_encrypted = true
+max_failed_auth = 5
+lockout_duration_seconds = 300
+
+[memory]
+operational_max_entries = 10000
+working_retention_days = 30
+longterm_db_path = "/var/lib/aios/memory/longterm.db"
+working_db_path = "/var/lib/aios/memory/working.db"
+context_max_tokens = 4000
+
+[agents]
+max_per_type = 3
+resource_limits_enabled = true
+sandbox_untrusted = true
+heartbeat_interval_seconds = 30
+dead_agent_timeout_seconds = 120
+
+[agents.system]
+enabled = true
+capabilities = ["fs.read", "process.list", "service.*", "monitor.*"]
+
+[agents.task]
+enabled = true
+capabilities = ["fs.*", "process.*", "net.*"]
+
+[agents.network]
+enabled = true
+capabilities = ["net.*", "firewall.*"]
+
+[agents.security]
+enabled = true
+capabilities = ["sec.*", "fs.read", "process.list", "monitor.*"]
+
+[agents.package]
+enabled = true
+capabilities = ["pkg.*", "fs.read"]
+
+[agents.storage]
+enabled = true
+capabilities = ["fs.*", "monitor.disk"]
+
+[agents.monitoring]
+enabled = true
+capabilities = ["monitor.*", "fs.read", "process.list"]
+
+[agents.learning]
+enabled = true
+capabilities = ["monitor.*", "fs.read"]
+
+[monitoring]
+health_check_interval_sec = 30
+metric_collection_interval_sec = 10
+alert_on_cpu_percent = 90
+alert_on_memory_percent = 85
+alert_on_disk_percent = 90
+
+[management_console]
+enabled = true
+bind_address = "0.0.0.0"
+port = 9090

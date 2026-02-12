@@ -1,0 +1,28 @@
+syntax = "proto3";
+package aios.agent;
+
+import "common.proto";
+
+service Agent {
+    rpc ExecuteTask(aios.common.Task) returns (aios.common.TaskResult);
+    rpc CancelTask(CancelTaskRequest) returns (aios.common.Status);
+    rpc GetStatus(aios.common.Empty) returns (AgentStatusResponse);
+    rpc Shutdown(aios.common.Empty) returns (aios.common.Status);
+}
+
+message CancelTaskRequest {
+    string task_id = 1;
+    string reason = 2;
+}
+
+message AgentStatusResponse {
+    string agent_id = 1;
+    string agent_type = 2;
+    string status = 3;
+    string current_task_id = 4;
+    int32 tasks_completed = 5;
+    int32 tasks_failed = 6;
+    int64 uptime_seconds = 7;
+    double cpu_usage = 8;
+    double memory_usage_mb = 9;
+}

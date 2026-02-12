@@ -1,0 +1,119 @@
+syntax = "proto3";
+package aios.common;
+
+message Empty {}
+
+message Status {
+    bool success = 1;
+    string message = 2;
+}
+
+message AgentId {
+    string id = 1;
+}
+
+message GoalId {
+    string id = 1;
+}
+
+message Goal {
+    string id = 1;
+    string description = 2;
+    int32 priority = 3;
+    string source = 4;
+    string status = 5;
+    int64 created_at = 6;
+    int64 updated_at = 7;
+    repeated string tags = 8;
+    bytes metadata_json = 9;
+}
+
+enum GoalStatus {
+    GOAL_PENDING = 0;
+    GOAL_PLANNING = 1;
+    GOAL_IN_PROGRESS = 2;
+    GOAL_COMPLETED = 3;
+    GOAL_FAILED = 4;
+    GOAL_CANCELLED = 5;
+}
+
+message Task {
+    string id = 1;
+    string goal_id = 2;
+    string description = 3;
+    string assigned_agent = 4;
+    string status = 5;
+    string intelligence_level = 6;
+    repeated string required_tools = 7;
+    repeated string depends_on = 8;
+    bytes input_json = 9;
+    bytes output_json = 10;
+    int64 created_at = 11;
+    int64 started_at = 12;
+    int64 completed_at = 13;
+    string error = 14;
+}
+
+enum TaskStatus {
+    TASK_PENDING = 0;
+    TASK_ASSIGNED = 1;
+    TASK_IN_PROGRESS = 2;
+    TASK_COMPLETED = 3;
+    TASK_FAILED = 4;
+    TASK_CANCELLED = 5;
+}
+
+message TaskResult {
+    string task_id = 1;
+    bool success = 2;
+    bytes output_json = 3;
+    string error = 4;
+    int64 duration_ms = 5;
+    int32 tokens_used = 6;
+    string model_used = 7;
+}
+
+message AgentRegistration {
+    string agent_id = 1;
+    string agent_type = 2;
+    repeated string capabilities = 3;
+    repeated string tool_namespaces = 4;
+    string status = 5;
+    int64 registered_at = 6;
+}
+
+message InferenceRequest {
+    string prompt = 1;
+    string system_prompt = 2;
+    int32 max_tokens = 3;
+    float temperature = 4;
+    string intelligence_level = 5;
+    string model = 6;
+    string requesting_agent = 7;
+    string task_id = 8;
+}
+
+message InferenceResponse {
+    string text = 1;
+    int32 tokens_used = 2;
+    int64 latency_ms = 3;
+    string model_used = 4;
+    string intelligence_level = 5;
+}
+
+message ServiceRegistration {
+    string name = 1;
+    string address = 2;
+    int32 port = 3;
+    string protocol = 4;
+    string status = 5;
+    int64 registered_at = 6;
+}
+
+message HealthStatus {
+    bool healthy = 1;
+    string service = 2;
+    string message = 3;
+    int64 uptime_seconds = 4;
+    map<string, string> details = 5;
+}

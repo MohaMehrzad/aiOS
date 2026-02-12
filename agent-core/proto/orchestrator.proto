@@ -1,0 +1,71 @@
+syntax = "proto3";
+package aios.orchestrator;
+
+import "common.proto";
+
+service Orchestrator {
+    // Goal management
+    rpc SubmitGoal(SubmitGoalRequest) returns (aios.common.GoalId);
+    rpc GetGoalStatus(aios.common.GoalId) returns (GoalStatusResponse);
+    rpc CancelGoal(aios.common.GoalId) returns (aios.common.Status);
+    rpc ListGoals(ListGoalsRequest) returns (GoalListResponse);
+
+    // Agent registration
+    rpc RegisterAgent(aios.common.AgentRegistration) returns (aios.common.Status);
+    rpc UnregisterAgent(aios.common.AgentId) returns (aios.common.Status);
+    rpc Heartbeat(HeartbeatRequest) returns (aios.common.Status);
+    rpc ListAgents(aios.common.Empty) returns (AgentListResponse);
+
+    // System status
+    rpc GetSystemStatus(aios.common.Empty) returns (SystemStatusResponse);
+}
+
+message SubmitGoalRequest {
+    string description = 1;
+    int32 priority = 2;
+    string source = 3;
+    repeated string tags = 4;
+    bytes metadata_json = 5;
+}
+
+message GoalStatusResponse {
+    aios.common.Goal goal = 1;
+    repeated aios.common.Task tasks = 2;
+    string current_phase = 3;
+    double progress_percent = 4;
+}
+
+message ListGoalsRequest {
+    string status_filter = 1;
+    int32 limit = 2;
+    int32 offset = 3;
+}
+
+message GoalListResponse {
+    repeated aios.common.Goal goals = 1;
+    int32 total = 2;
+}
+
+message HeartbeatRequest {
+    string agent_id = 1;
+    string status = 2;
+    string current_task_id = 3;
+    double cpu_usage = 4;
+    double memory_usage_mb = 5;
+}
+
+message AgentListResponse {
+    repeated aios.common.AgentRegistration agents = 1;
+}
+
+message SystemStatusResponse {
+    int32 active_goals = 1;
+    int32 pending_tasks = 2;
+    int32 active_agents = 3;
+    repeated string loaded_models = 4;
+    double cpu_percent = 5;
+    double memory_used_mb = 6;
+    double memory_total_mb = 7;
+    string autonomy_level = 8;
+    int64 uptime_seconds = 9;
+}

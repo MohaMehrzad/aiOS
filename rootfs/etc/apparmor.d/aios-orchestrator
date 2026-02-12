@@ -1,0 +1,86 @@
+# AppArmor profile for the aiOS Orchestrator daemon
+# This profile governs the central orchestration service that coordinates
+# agent execution, task routing, and inter-service communication.
+
+#include <tunables/global>
+
+profile aios-orchestrator /usr/sbin/aios-orchestrator {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  # Executable
+  /usr/sbin/aios-orchestrator                  mr,
+
+  # Shared libraries
+  /usr/lib/aios/*.so                           mr,
+  /usr/lib/aios/plugins/*.so                   mr,
+
+  # Configuration: read-only
+  /etc/aios/**                                 r,
+  /etc/aios/agents/**                          r,
+  /etc/aios/security/**                        r,
+  /etc/ssl/certs/**                            r,
+  /etc/ssl/openssl.cnf                         r,
+  /etc/resolv.conf                             r,
+  /etc/hosts                                   r,
+  /etc/nsswitch.conf                           r,
+  /etc/localtime                               r,
+  /etc/ld.so.cache                             r,
+
+  # State and data directories
+  /var/lib/aios/**                             rw,
+  /var/lib/aios/orchestrator/                  rw,
+  /var/lib/aios/orchestrator/**                rwk,
+  /var/lib/aios/tasks/**                       rw,
+  /var/lib/aios/state/**                       rw,
+
+  # Logging
+  /var/log/aios/orchestrator.log               w,
+  /var/log/aios/orchestrator.log.*             w,
+  /var/log/aios/audit.log                      w,
+
+  # Runtime
+  /run/aios/orchestrator.pid                   rw,
+  /run/aios/orchestrator.sock                  rw,
+
+  # Temporary files
+  /tmp/aios-orchestrator-*                     rw,
+
+  # Proc filesystem: limited access
+  @{PROC}/@{pid}/status                        r,
+  @{PROC}/@{pid}/fd/                           r,
+  @{PROC}/@{pid}/oom_score_adj                 r,
+
+  # Network access: TCP and Unix sockets for gRPC and API communication
+  network tcp,
+  network udp,
+  network unix,
+
+  # Deny raw network access (no packet crafting or sniffing)
+  deny network raw,
+  deny network packet,
+
+  # Deny mount operations (no filesystem manipulation)
+  deny mount,
+  deny umount,
+  deny pivot_root,
+
+  # Deny ptrace (no debugging other processes)
+  deny ptrace,
+
+  # Deny module loading
+  deny @{PROC}/sys/kernel/modules_disabled     w,
+
+  # Deny write to system directories
+  deny /usr/**                                 w,
+  deny /etc/**                                 w,
+  deny /boot/**                                rwx,
+  deny /sys/**                                 w,
+
+  # Signal handling: only to own processes
+  signal (send) set=(term, kill, hup) peer=aios-orchestrator,
+  signal (send) set=(term, kill) peer=aios-tools,
+  signal (send) set=(term, kill) peer=aios-memory,
+  signal (send) set=(term, kill) peer=aios-api-gateway,
+  signal (receive),
+}
