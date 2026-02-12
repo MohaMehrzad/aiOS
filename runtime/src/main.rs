@@ -62,6 +62,68 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Auto-load models found in the model directory
+    {
+        let mut mgr = model_manager.lock().await;
+        let model_dir = std::env::var("AIOS_MODEL_DIR")
+            .unwrap_or_else(|_| "/var/lib/aios/models/".to_string());
+        let model_path = std::path::Path::new(&model_dir);
+
+        if model_path.exists() {
+            info!("Scanning {model_dir} for GGUF models to auto-load...");
+            if let Ok(entries) = std::fs::read_dir(model_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                        let file_name = path.file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        // Choose context length and threads based on model size
+                        let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        let (ctx, threads) = if file_size > 2_000_000_000 {
+                            // Large model (>2GB) — Mistral 7B class
+                            (4096_i32, 6_i32)
+                        } else {
+                            // Small model — TinyLlama class
+                            (2048_i32, 4_i32)
+                        };
+
+                        info!(
+                            model = %file_name,
+                            path = %path.display(),
+                            size_mb = file_size / 1_000_000,
+                            ctx,
+                            "Auto-loading model"
+                        );
+
+                        let req = crate::proto::runtime::LoadModelRequest {
+                            model_name: file_name.clone(),
+                            model_path: path.to_string_lossy().to_string(),
+                            context_length: ctx,
+                            gpu_layers: 0,
+                            threads,
+                            port: 0,
+                        };
+
+                        match mgr.load_model(req).await {
+                            Ok(status) => info!(
+                                model = %file_name,
+                                status = %status.status,
+                                port = status.port,
+                                "Model auto-loaded"
+                            ),
+                            Err(e) => error!(model = %file_name, "Failed to auto-load: {e:#}"),
+                        }
+                    }
+                }
+            }
+        } else {
+            info!("Model directory {model_dir} not found, skipping auto-load");
+        }
+    }
+
     let service = AIRuntimeService {
         model_manager,
         inference_engine,

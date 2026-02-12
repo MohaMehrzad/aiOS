@@ -178,6 +178,18 @@ impl GoalEngine {
             goal.updated_at = chrono::Utc::now().timestamp();
         }
     }
+
+    /// Set metadata on a goal (used to store preferred provider, etc.)
+    pub fn set_metadata(&mut self, goal_id: &str, metadata: Vec<u8>) {
+        if let Some(goal) = self.goals.get_mut(goal_id) {
+            goal.metadata_json = metadata;
+        }
+    }
+
+    /// Get metadata from a goal
+    pub fn get_metadata(&self, goal_id: &str) -> Option<&[u8]> {
+        self.goals.get(goal_id).map(|g| g.metadata_json.as_slice())
+    }
 }
 
 #[cfg(test)]

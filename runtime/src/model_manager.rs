@@ -221,9 +221,14 @@ impl ModelManager {
             threads,
         };
 
-        // Wait for the health endpoint to come up (up to 30 s).
+        // Wait for the health endpoint to come up (up to 120 s for large models).
         let health_url = format!("http://127.0.0.1:{port}/health");
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let timeout_secs = if managed.path.metadata().map(|m| m.len()).unwrap_or(0) > 2_000_000_000 {
+            120 // Large models need more startup time on CPU
+        } else {
+            60
+        };
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
         let mut healthy = false;
 
         while Instant::now() < deadline {
@@ -263,7 +268,7 @@ impl ModelManager {
             info!(model = %name, port, "llama-server is ready");
             managed.status = ModelState::Ready;
         } else {
-            let msg = "llama-server did not become healthy within 30 s".to_string();
+            let msg = format!("llama-server did not become healthy within {timeout_secs}s");
             warn!(model = %name, "{msg}");
             managed.status = ModelState::Error(msg);
         }

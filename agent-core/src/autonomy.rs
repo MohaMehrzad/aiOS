@@ -131,12 +131,16 @@ async fn autonomy_tick(
                 );
             }
             IntelligenceLevel::Operational | IntelligenceLevel::Tactical => {
+                // Read preferred provider from goal metadata
+                let preferred_provider = get_preferred_provider(&state, &goal_id);
+
                 // Call local AI runtime for operational/tactical tasks
                 let result = execute_ai_task(
                     &state.clients,
                     &task.description,
                     level.as_str(),
                     AiBackend::LocalRuntime,
+                    &preferred_provider,
                 )
                 .await;
 
@@ -150,12 +154,16 @@ async fn autonomy_tick(
                 );
             }
             IntelligenceLevel::Strategic => {
+                // Read preferred provider from goal metadata
+                let preferred_provider = get_preferred_provider(&state, &goal_id);
+
                 // Call API gateway for strategic tasks (Claude/GPT)
                 let result = execute_ai_task(
                     &state.clients,
                     &task.description,
                     level.as_str(),
                     AiBackend::ApiGateway,
+                    &preferred_provider,
                 )
                 .await;
 
@@ -222,6 +230,16 @@ struct ToolCallRequest {
     input_json: Vec<u8>,
 }
 
+/// Extract preferred provider from goal metadata JSON
+fn get_preferred_provider(state: &OrchestratorState, goal_id: &str) -> String {
+    state
+        .goal_engine
+        .get_metadata(goal_id)
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .and_then(|v| v.get("preferred_provider").and_then(|p| p.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
 /// Execute a task through AI inference with fallback chain:
 /// local runtime -> api-gateway -> heuristic
 async fn execute_ai_task(
@@ -229,6 +247,7 @@ async fn execute_ai_task(
     task_description: &str,
     intelligence_level: &str,
     preferred_backend: AiBackend,
+    preferred_provider: &str,
 ) -> AiInferenceResult {
     // Assemble context for the AI call
     let assembler = ContextAssembler::new(4096);
@@ -252,7 +271,7 @@ async fn execute_ai_task(
             try_runtime_infer(clients, &prompt, &system_prompt).await
         }
         AiBackend::ApiGateway => {
-            try_api_gateway_infer(clients, &prompt, &system_prompt).await
+            try_api_gateway_infer_with_provider(clients, &prompt, &system_prompt, preferred_provider).await
         }
     };
 
@@ -264,7 +283,7 @@ async fn execute_ai_task(
     let fallback = match preferred_backend {
         AiBackend::LocalRuntime => {
             info!("Local runtime unavailable, falling back to API gateway");
-            try_api_gateway_infer(clients, &prompt, &system_prompt).await
+            try_api_gateway_infer_with_provider(clients, &prompt, &system_prompt, preferred_provider).await
         }
         AiBackend::ApiGateway => {
             info!("API gateway unavailable, falling back to local runtime");
@@ -331,11 +350,12 @@ async fn try_runtime_infer(
     }
 }
 
-/// Try to call the API gateway for inference
-async fn try_api_gateway_infer(
+/// Try to call the API gateway for inference with a specific provider
+async fn try_api_gateway_infer_with_provider(
     clients: &crate::clients::ServiceClients,
     prompt: &str,
     system_prompt: &str,
+    preferred_provider: &str,
 ) -> Option<AiInferenceResult> {
     match clients.api_gateway().await {
         Ok(mut client) => {
@@ -344,7 +364,7 @@ async fn try_api_gateway_infer(
                 system_prompt: system_prompt.to_string(),
                 max_tokens: 2048,
                 temperature: 0.3,
-                preferred_provider: String::new(),
+                preferred_provider: preferred_provider.to_string(),
                 requesting_agent: "autonomy-loop".to_string(),
                 task_id: String::new(),
                 allow_fallback: true,

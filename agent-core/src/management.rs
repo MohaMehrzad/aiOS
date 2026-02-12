@@ -99,6 +99,8 @@ struct SubmitGoalRequest {
     description: String,
     #[serde(default = "default_priority")]
     priority: i32,
+    #[serde(default)]
+    provider: String,
 }
 
 fn default_priority() -> i32 {
@@ -378,18 +380,25 @@ async fn submit_goal(
 ) -> Result<Json<SubmitGoalResponse>, StatusCode> {
     let mut s = state.orchestrator.write().await;
     let description = req.description.clone();
+    let provider = req.provider.clone();
     match s
         .goal_engine
         .submit_goal(req.description, req.priority, "management-console".into())
         .await
     {
         Ok(id) => {
+            // Store preferred provider in goal metadata
+            if !provider.is_empty() {
+                let metadata = format!("{{\"preferred_provider\":\"{provider}\"}}");
+                s.goal_engine.set_metadata(&id, metadata.into_bytes());
+            }
+
             // Decompose goal into executable tasks so the autonomy loop can process them
             match s.task_planner.decompose_goal(&id, &description).await {
                 Ok(tasks) => {
                     let task_count = tasks.len();
                     s.goal_engine.add_tasks(&id, tasks);
-                    info!("Goal {id} decomposed into {task_count} tasks");
+                    info!("Goal {id} decomposed into {task_count} tasks (provider: {provider})");
                 }
                 Err(e) => {
                     warn!("Failed to decompose goal {id}: {e}");
@@ -663,7 +672,15 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
             <div>
                 <h2>Submit Goal</h2>
                 <textarea id="goal-input" rows="2" placeholder="Describe what you want the system to do..."></textarea>
-                <br><br>
+                <div class="provider-bar" style="margin-top:8px">
+                    <label>Model:</label>
+                    <select id="goal-provider-select">
+                        <option value="">Auto (best available)</option>
+                        <option value="claude">Claude Sonnet 4</option>
+                        <option value="openai">ChatGPT 5</option>
+                        <option value="qwen3">Qwen3 30B</option>
+                    </select>
+                </div>
                 <button onclick="submitGoal()" id="goal-submit-btn">Submit Goal</button>
                 <span id="goal-result" style="margin-left:10px;color:#6b7280"></span>
             </div>
@@ -841,6 +858,7 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
         async function submitGoal() {
             const desc = document.getElementById('goal-input').value;
             if (!desc) return;
+            const provider = document.getElementById('goal-provider-select').value;
             const btn = document.getElementById('goal-submit-btn');
             btn.disabled = true;
             btn.textContent = 'Submitting...';
@@ -848,7 +866,7 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                 const res = await fetch('/api/goals', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({description: desc, priority: 2})
+                    body: JSON.stringify({description: desc, priority: 2, provider: provider})
                 });
                 const data = await res.json();
                 document.getElementById('goal-result').textContent = `Created: ${data.goal_id.slice(0,8)}`;
