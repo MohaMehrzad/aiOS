@@ -138,11 +138,19 @@ async fn autonomy_tick(
                 let preferred_provider = get_preferred_provider(&state, &goal_id);
                 let messages = state.goal_engine.get_messages(&goal_id);
 
+                // If user selected a specific provider, use API gateway instead of local runtime
+                let backend = if preferred_provider.is_empty() {
+                    AiBackend::LocalRuntime
+                } else {
+                    info!("User selected provider '{preferred_provider}', routing to API gateway");
+                    AiBackend::ApiGateway
+                };
+
                 let result = execute_ai_task(
                     &state.clients,
                     &task.description,
                     level.as_str(),
-                    AiBackend::LocalRuntime,
+                    backend,
                     &preferred_provider,
                     &messages,
                 )
@@ -282,10 +290,32 @@ async fn execute_ai_task(
         prompt.push_str("\nExecute the task using the provided context.\n\n");
     }
 
+    // Tell the AI what tools are available
     prompt.push_str(
-        "Respond with a JSON object:\n\
-         {\"reasoning\": \"...\", \"tool_calls\": [{\"tool\": \"tool.name\", \"input\": {}}], \"result\": \"...\"}\n\
-         Or if you need more information: {\"needs_clarification\": true, \"questions\": [\"...\"]}"
+        "Available tools you can call:\n\
+         - fs.read, fs.write, fs.list, fs.delete, fs.mkdir, fs.copy, fs.move, fs.stat, fs.search\n\
+         - process.list, process.kill, process.spawn, process.info\n\
+         - service.list, service.start, service.stop, service.restart, service.status\n\
+         - net.ping, net.dns, net.interfaces, net.ports, net.connections, net.curl\n\
+         - firewall.list, firewall.add, firewall.remove\n\
+         - pkg.install, pkg.remove, pkg.list, pkg.search, pkg.update\n\
+         - sec.audit, sec.permissions, sec.users, sec.processes\n\
+         - monitor.cpu, monitor.memory, monitor.disk, monitor.load, monitor.processes\n\
+         - web.fetch, web.download, web.search\n\
+         - git.clone, git.status, git.pull, git.commit, git.log\n\
+         - code.run, code.analyze, code.format\n\
+         - self.status, self.config, self.restart\n\n"
+    );
+
+    prompt.push_str(
+        "You MUST respond with ONLY a valid JSON object, no other text.\n\
+         If you can execute this task using the tools above, respond with:\n\
+         {\"reasoning\": \"why you chose these actions\", \"tool_calls\": [{\"tool\": \"tool.name\", \"input\": {\"param\": \"value\"}}], \"result\": \"summary\"}\n\n\
+         If you need more information from the user before you can act, respond with:\n\
+         {\"needs_clarification\": true, \"questions\": [\"What specific thing do you need?\"]}\n\n\
+         If the task cannot be done with available tools and needs no clarification, respond with:\n\
+         {\"reasoning\": \"explanation\", \"tool_calls\": [], \"result\": \"your answer\"}\n\n\
+         IMPORTANT: You must output ONLY valid JSON. No markdown, no explanation outside JSON."
     );
 
     // Try preferred backend first
@@ -552,6 +582,42 @@ fn parse_clarification(response_text: &str) -> Option<String> {
     None
 }
 
+/// Check if the AI response is valid structured JSON with a "result" field.
+/// Returns true only if the response follows the expected JSON format.
+fn parse_structured_result(response_text: &str) -> bool {
+    let text = response_text.trim();
+    let json_str = if text.starts_with("```") {
+        let lines: Vec<&str> = text.lines().collect();
+        let start = if lines
+            .first()
+            .map_or(false, |l| l.starts_with("```"))
+        {
+            1
+        } else {
+            0
+        };
+        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        lines[start..end].join("\n")
+    } else {
+        text.to_string()
+    };
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+        // Must have a "result" field with actual content to count as structured
+        if let Some(result) = parsed.get("result") {
+            if let Some(s) = result.as_str() {
+                return !s.is_empty();
+            }
+            return !result.is_null();
+        }
+    }
+    false
+}
+
 /// Handle the result of an AI inference call — execute tool calls and record results
 async fn handle_ai_result(
     state: &mut OrchestratorState,
@@ -561,8 +627,17 @@ async fn handle_ai_result(
     intelligence_level: &str,
     result: AiInferenceResult,
 ) {
-    // Check if AI is asking for clarification (only when no tool calls)
+    // Log what the AI returned for debugging
+    let tool_count = result.tool_calls.len();
+    let response_preview: String = result.response_text.chars().take(200).collect();
+    info!(
+        "Task {task_id}: AI returned {} tool calls, {} tokens, model={}, response preview: {}",
+        tool_count, result.tokens_used, result.model_used, response_preview
+    );
+
+    // When no tool calls, analyze the AI response more carefully
     if result.tool_calls.is_empty() {
+        // Check if AI is asking for clarification
         if let Some(clarification) = parse_clarification(&result.response_text) {
             state.goal_engine.add_message(goal_id, "ai", &clarification);
             state.task_planner.mark_awaiting_input(task_id);
@@ -573,11 +648,39 @@ async fn handle_ai_result(
             info!("Task {task_id} awaiting user input: {clarification}");
             return;
         }
+
+        // Check if the response is valid structured JSON with an actual result
+        let has_structured_result = parse_structured_result(&result.response_text);
+        if !has_structured_result {
+            // AI returned unstructured text — it didn't follow instructions.
+            // Show the response to the user and ask for guidance instead of marking complete.
+            let ai_text = result.response_text.trim();
+            let display_text = if ai_text.len() > 1000 {
+                format!("{}...", &ai_text[..1000])
+            } else {
+                ai_text.to_string()
+            };
+            state.goal_engine.add_message(
+                goal_id,
+                "ai",
+                &format!(
+                    "I analyzed this task but couldn't determine specific actions to take.\n\n{}\n\nPlease provide more specific instructions or tell me what tools to use.",
+                    display_text
+                ),
+            );
+            state.task_planner.mark_awaiting_input(task_id);
+            state
+                .goal_engine
+                .update_task_status(goal_id, task_id, "awaiting_input");
+
+            warn!("Task {task_id}: AI returned unstructured response, awaiting user input");
+            return;
+        }
     }
 
     // Execute tool calls if present
     let output = if result.tool_calls.is_empty() {
-        // No tool calls — the AI response is the result
+        // No tool calls but valid structured JSON result — the AI answered directly
         result.response_text.as_bytes().to_vec()
     } else {
         // Execute each tool call via the tools gRPC service
