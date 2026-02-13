@@ -230,10 +230,7 @@ impl AgentSpawner {
                         }
                     }
                     Ok(None) => {
-                        // Still running, check heartbeat
-                        if agent.last_heartbeat.elapsed() > self.heartbeat_timeout {
-                            warn!("Agent {} heartbeat timeout", name);
-                        }
+                        // Still running — heartbeat tracking is handled by agent_router
                     }
                     Err(e) => {
                         warn!("Error checking agent {} status: {}", name, e);
