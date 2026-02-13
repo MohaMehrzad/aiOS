@@ -467,6 +467,12 @@ impl Executor {
             Box::new(|input| crate::process::cgroup::execute(input)),
         );
 
+        // Email tools
+        self.handlers.insert(
+            "email.send".into(),
+            Box::new(|input| crate::email::send::execute(input)),
+        );
+
         // Container tools
         self.handlers.insert(
             "container.create".into(),

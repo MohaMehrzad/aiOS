@@ -35,6 +35,7 @@ pub mod code;
 pub mod self_update;
 pub mod plugin;
 pub mod container;
+pub mod email;
 
 pub mod proto {
     pub mod common {
@@ -374,6 +375,8 @@ fn register_builtin_tools(reg: &mut registry::Registry) {
     plugin::register_tools(reg);
     // Container tools (Podman)
     container::register_tools(reg);
+    // Email tools
+    email::register_tools(reg);
 
     info!("Registered {} built-in tools", reg.tool_count());
 }

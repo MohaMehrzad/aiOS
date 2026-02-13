@@ -389,10 +389,15 @@ impl TaskPlanner {
         }
         if desc_lower.contains("plugin")
             || desc_lower.contains("script")
-            || desc_lower.contains("email")
-            || desc_lower.contains("smtp")
         {
             tools.push("plugin".to_string());
+        }
+        if desc_lower.contains("email")
+            || desc_lower.contains("smtp")
+            || desc_lower.contains("mail")
+            || desc_lower.contains("newsletter")
+        {
+            tools.push("email".to_string());
         }
         if desc_lower.contains("monitor")
             || has_word(&desc_lower, "cpu")

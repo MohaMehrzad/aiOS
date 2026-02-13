@@ -64,6 +64,7 @@ impl CapabilityChecker {
             "self_read", "self_update",
             "plugin_read", "plugin_manage", "plugin_execute",
             "container_read", "container_manage",
+            "email_send",
         ]
         .into_iter()
         .map(String::from)
@@ -227,6 +228,8 @@ impl CapabilityChecker {
             ("container.list", vec!["container_read"], RiskLevel::Low),
             ("container.exec", vec!["container_manage"], RiskLevel::High),
             ("container.logs", vec!["container_read"], RiskLevel::Low),
+            // Email
+            ("email.send", vec!["email_send"], RiskLevel::Medium),
             // Plugin management
             ("plugin.create", vec!["plugin_manage", "fs_write"], RiskLevel::High),
             ("plugin.list", vec!["plugin_read"], RiskLevel::Low),
