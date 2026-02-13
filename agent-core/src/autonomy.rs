@@ -123,7 +123,13 @@ async fn autonomy_tick(
         let next_task = state.task_planner.next_task().cloned();
         let task = match next_task {
             Some(t) => t,
-            None => return Ok(()),
+            None => {
+                // No pending tasks — drop lock and skip to Phase 4 (housekeeping)
+                // so goal completion checks still run.
+                drop(state);
+                run_housekeeping(state_arc).await;
+                return Ok(());
+            }
         };
 
         let task_id = task.id.clone();
@@ -248,17 +254,21 @@ async fn autonomy_tick(
                 &heuristic_result,
             ).await;
 
-            let mut state = state_arc.write().await;
-            record_ai_result(
-                &mut state,
-                &task_id_h,
-                &goal_id_h,
-                &task_desc_h,
-                &level_str_h,
-                heuristic_result,
-                tool_execution,
-            ).await;
+            {
+                let mut state = state_arc.write().await;
+                record_ai_result(
+                    &mut state,
+                    &task_id_h,
+                    &goal_id_h,
+                    &task_desc_h,
+                    &level_str_h,
+                    heuristic_result,
+                    tool_execution,
+                ).await;
+            }
 
+            // Run housekeeping so goal completion is detected immediately
+            run_housekeeping(state_arc).await;
             return Ok(());
         }
 
@@ -325,47 +335,54 @@ async fn autonomy_tick(
         .await;
     }
 
-    // ── Phase 4: Brief write lock for housekeeping ──
-    {
-        let mut state = state_arc.write().await;
+    // ── Phase 4: Housekeeping (dead agent recovery + goal completion) ──
+    run_housekeeping(state_arc).await;
 
-        // Check for stuck agent-assigned tasks (timeout recovery)
-        let dead_agents = state.agent_router.dead_agents();
-        for dead_id in &dead_agents {
-            if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
-                warn!(
-                    "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
-                );
-                state.agent_router.task_completed(dead_id, false);
-                state.task_planner.resume_task(&stuck_task_id);
-            }
-        }
+    Ok(())
+}
 
-        // Check if any goals are complete
-        let (goals, _) = state.goal_engine.list_goals("", 100, 0).await;
-        for goal in goals {
-            if goal.status == "pending" || goal.status == "in_progress" {
-                let progress = state.goal_engine.calculate_progress(&goal.id).await;
-                if progress >= 100.0 {
-                    state.goal_engine.update_status(&goal.id, "completed");
-                    info!("Goal {} completed", goal.id);
+/// Housekeeping: dead agent recovery + goal completion checks.
+/// Extracted so it can be called from multiple code paths (heuristic, AI, no-task).
+async fn run_housekeeping(state_arc: &Arc<RwLock<OrchestratorState>>) {
+    let mut state = state_arc.write().await;
 
-                    state.decision_logger.log_decision(
-                        "goal_completion",
-                        &[goal.id.clone()],
-                        "completed",
-                        &format!("All tasks for goal '{}' completed successfully", goal.description),
-                        "reactive",
-                        "heuristic",
-                    );
-                } else if progress > 0.0 && goal.status == "pending" {
-                    state.goal_engine.update_status(&goal.id, "in_progress");
-                }
-            }
+    // Check for stuck agent-assigned tasks (timeout recovery)
+    let dead_agents = state.agent_router.dead_agents();
+    for dead_id in &dead_agents {
+        if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
+            warn!(
+                "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
+            );
+            state.agent_router.task_completed(dead_id, false);
+            state.task_planner.resume_task(&stuck_task_id);
         }
     }
 
-    Ok(())
+    // Check if any goals are complete
+    let (goals, _) = state.goal_engine.list_goals("", 100, 0).await;
+    for goal in goals {
+        if goal.status == "pending" || goal.status == "in_progress" {
+            let progress = state.goal_engine.calculate_progress(&goal.id).await;
+            if progress >= 100.0 {
+                state.goal_engine.update_status(&goal.id, "completed");
+                info!("Goal {} completed", goal.id);
+
+                state.decision_logger.log_decision(
+                    "goal_completion",
+                    &[goal.id.clone()],
+                    "completed",
+                    &format!(
+                        "All tasks for goal '{}' completed successfully",
+                        goal.description
+                    ),
+                    "reactive",
+                    "heuristic",
+                );
+            } else if progress > 0.0 && goal.status == "pending" {
+                state.goal_engine.update_status(&goal.id, "in_progress");
+            }
+        }
+    }
 }
 
 /// Result of executing tool calls outside the write lock
