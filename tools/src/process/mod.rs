@@ -3,6 +3,7 @@
 //! Each submodule exposes `pub fn execute(input: &[u8]) -> Result<Vec<u8>>`
 //! which deserialises JSON input, performs the operation, and returns JSON output.
 
+pub mod cgroup;
 pub mod info;
 pub mod kill;
 pub mod list;
@@ -66,5 +67,16 @@ pub fn register_tools(reg: &mut Registry) {
         false,
         false,
         5000,
+    ));
+
+    reg.register_tool(make_tool(
+        "process.cgroup",
+        "process",
+        "Manage cgroup v2 resource limits: create groups, assign PIDs, set CPU/memory/IO limits",
+        vec!["process.admin"],
+        "high",
+        false,
+        true,
+        10000,
     ));
 }

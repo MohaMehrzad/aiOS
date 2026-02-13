@@ -5,6 +5,8 @@
 
 pub mod cpu;
 pub mod disk;
+pub mod ebpf;
+pub mod fs_events;
 pub mod logs;
 pub mod memory;
 pub mod network;
@@ -61,6 +63,28 @@ pub fn register_tools(reg: &mut Registry) {
         "monitor.logs",
         "monitor",
         "Read recent system log entries, optionally filtered by service name",
+        vec!["monitor.read"],
+        "low",
+        true,
+        false,
+        10000,
+    ));
+
+    reg.register_tool(make_tool(
+        "monitor.ebpf_trace",
+        "monitor",
+        "Trace syscalls: process spawns, file opens, and network connections",
+        vec!["monitor.read"],
+        "medium",
+        true,
+        false,
+        30000,
+    ));
+
+    reg.register_tool(make_tool(
+        "monitor.fs_watch",
+        "monitor",
+        "Monitor filesystem for recently modified files under a given path",
         vec!["monitor.read"],
         "low",
         true,

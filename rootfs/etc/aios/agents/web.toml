@@ -1,0 +1,24 @@
+[agent]
+name = "WebAgent"
+type = "web"
+description = "Handles web-related tasks: HTTP requests, API calls, web scraping, webhook management, and file downloads."
+
+[capabilities]
+tools = [
+    "web.http_request",
+    "web.scrape",
+    "web.webhook",
+    "web.download",
+    "web.api_call",
+    "net.dns",
+    "net.http_get",
+]
+
+[limits]
+max_memory_mb = 256
+max_cpu_percent = 15
+max_tasks = 8
+
+[intelligence]
+default_level = "local"
+allowed_levels = ["local", "hybrid", "cloud"]

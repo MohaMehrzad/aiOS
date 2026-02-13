@@ -176,6 +176,13 @@ impl AgentRouter {
             .count()
     }
 
+    /// Get the task assigned to a specific agent (if any)
+    pub fn get_assigned_task_id(&self, agent_id: &str) -> Option<String> {
+        self.agents
+            .get(agent_id)
+            .and_then(|a| a.current_task.clone())
+    }
+
     /// Get agents that have timed out
     pub fn dead_agents(&self) -> Vec<String> {
         self.agents
@@ -183,6 +190,28 @@ impl AgentRouter {
             .filter(|(_, a)| a.last_heartbeat.elapsed().as_secs() >= self.heartbeat_timeout_secs)
             .map(|(id, _)| id.clone())
             .collect()
+    }
+
+    /// Route a task to a remote cluster node if no local agent can handle it.
+    /// Returns (node_id, agent_type) if a remote node has a suitable agent.
+    pub fn route_task_to_node(
+        &self,
+        task: &Task,
+        cluster: &crate::cluster::ClusterManager,
+    ) -> Option<String> {
+        // Only try remote routing if local routing fails
+        if self.route_task(task).is_some() {
+            return None;
+        }
+
+        // Extract required agent type from task tools
+        let required_tool = task.required_tools.first().map(|s| s.as_str()).unwrap_or("");
+        if required_tool.is_empty() {
+            return None;
+        }
+
+        // Ask cluster manager to find a node with matching agent
+        cluster.route_to_node(required_tool).map(|n| n.address.clone())
     }
 }
 

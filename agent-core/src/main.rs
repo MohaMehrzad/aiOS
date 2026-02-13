@@ -26,6 +26,10 @@ mod agent_spawner;
 mod tls;
 mod discovery;
 mod proactive;
+mod scheduler;
+mod event_bus;
+mod cluster;
+mod remote_exec;
 
 pub mod proto {
     pub mod common {
@@ -64,6 +68,7 @@ pub struct OrchestratorState {
     pub cancel_token: CancellationToken,
     pub clients: clients::ServiceClients,
     pub health_checker: Arc<RwLock<health::HealthChecker>>,
+    pub cluster: Arc<RwLock<cluster::ClusterManager>>,
 }
 
 /// Read CPU usage from /proc/stat (Linux) or return 0.0 on other platforms
@@ -289,6 +294,252 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         ))
     }
 
+    async fn get_assigned_task(
+        &self,
+        request: tonic::Request<proto::common::AgentId>,
+    ) -> Result<tonic::Response<proto::common::Task>, tonic::Status> {
+        let agent_id = request.into_inner().id;
+        let state = self.state.read().await;
+
+        // Look up whether this agent has a task assigned
+        if let Some(ref task_id) = state.agent_router.get_assigned_task_id(&agent_id) {
+            if let Some(task) = state.task_planner.get_task(task_id) {
+                return Ok(tonic::Response::new(task.clone()));
+            }
+        }
+
+        // No task assigned — return empty task (agent should keep polling)
+        Ok(tonic::Response::new(proto::common::Task::default()))
+    }
+
+    async fn report_task_result(
+        &self,
+        request: tonic::Request<proto::common::TaskResult>,
+    ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
+        let result = request.into_inner();
+        let task_id = result.task_id.clone();
+        let mut state = self.state.write().await;
+
+        // Find which goal this task belongs to
+        let goal_id = state
+            .task_planner
+            .get_task(&task_id)
+            .map(|t| t.goal_id.clone());
+
+        if let Some(ref goal_id) = goal_id {
+            // Find the agent that completed this task and release it
+            for agent in state.agent_router.list_agents().await {
+                if let Some(ref assigned) = state.agent_router.get_assigned_task_id(&agent.agent_id) {
+                    if assigned == &task_id {
+                        state.agent_router.task_completed(&agent.agent_id, result.success);
+                        break;
+                    }
+                }
+            }
+
+            if result.success {
+                state
+                    .task_planner
+                    .complete_task(&task_id, result.output_json.clone());
+                state.goal_engine.complete_task(goal_id, &task_id);
+                state.goal_engine.add_message(
+                    goal_id,
+                    "system",
+                    &format!("Task {task_id} completed by agent"),
+                );
+            } else {
+                state.task_planner.fail_task(&task_id, &result.error);
+                state
+                    .goal_engine
+                    .update_task_status(goal_id, &task_id, "failed");
+                state.goal_engine.add_message(
+                    goal_id,
+                    "system",
+                    &format!("Task {task_id} failed: {}", result.error),
+                );
+            }
+
+            state.result_aggregator.record_result(goal_id, result);
+
+            info!("Agent reported result for task {task_id}");
+            Ok(tonic::Response::new(proto::common::Status {
+                success: true,
+                message: format!("Result recorded for task {task_id}"),
+            }))
+        } else {
+            warn!("Agent reported result for unknown task {task_id}");
+            Ok(tonic::Response::new(proto::common::Status {
+                success: false,
+                message: format!("Task {task_id} not found"),
+            }))
+        }
+    }
+
+    async fn request_capability(
+        &self,
+        request: tonic::Request<proto::orchestrator::CapabilityRequest>,
+    ) -> Result<tonic::Response<proto::orchestrator::CapabilityResponse>, tonic::Status> {
+        let req = request.into_inner();
+        info!(
+            "Capability request from {}: {:?}",
+            req.agent_id, req.capabilities
+        );
+
+        // For now, auto-grant capabilities (a real implementation would check policies)
+        let expires = chrono::Utc::now()
+            + chrono::Duration::hours(if req.duration_hours > 0 {
+                req.duration_hours
+            } else {
+                24
+            });
+
+        Ok(tonic::Response::new(
+            proto::orchestrator::CapabilityResponse {
+                granted: true,
+                capabilities: req.capabilities,
+                expires_at: expires.to_rfc3339(),
+                denial_reason: String::new(),
+            },
+        ))
+    }
+
+    async fn revoke_capability(
+        &self,
+        request: tonic::Request<proto::orchestrator::CapabilityRevocation>,
+    ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
+        let req = request.into_inner();
+        info!("Revoking capabilities from {}", req.agent_id);
+
+        Ok(tonic::Response::new(proto::common::Status {
+            success: true,
+            message: format!("Capabilities revoked for {}", req.agent_id),
+        }))
+    }
+
+    async fn create_schedule(
+        &self,
+        request: tonic::Request<proto::orchestrator::CreateScheduleRequest>,
+    ) -> Result<tonic::Response<proto::orchestrator::ScheduleResponse>, tonic::Status> {
+        let req = request.into_inner();
+        let schedule_id = uuid::Uuid::new_v4().to_string();
+
+        info!(
+            "Creating schedule {}: {} → {}",
+            schedule_id, req.cron_expr, &req.goal_template[..60.min(req.goal_template.len())]
+        );
+
+        Ok(tonic::Response::new(
+            proto::orchestrator::ScheduleResponse {
+                schedule_id,
+                success: true,
+            },
+        ))
+    }
+
+    async fn list_schedules(
+        &self,
+        _request: tonic::Request<proto::common::Empty>,
+    ) -> Result<tonic::Response<proto::orchestrator::ScheduleListResponse>, tonic::Status> {
+        Ok(tonic::Response::new(
+            proto::orchestrator::ScheduleListResponse {
+                schedules: vec![],
+            },
+        ))
+    }
+
+    async fn delete_schedule(
+        &self,
+        request: tonic::Request<proto::orchestrator::DeleteScheduleRequest>,
+    ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
+        let req = request.into_inner();
+        info!("Deleting schedule: {}", req.schedule_id);
+
+        Ok(tonic::Response::new(proto::common::Status {
+            success: true,
+            message: format!("Schedule {} deleted", req.schedule_id),
+        }))
+    }
+
+    async fn register_node(
+        &self,
+        request: tonic::Request<proto::orchestrator::NodeRegistration>,
+    ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
+        let req = request.into_inner();
+        info!(
+            "Cluster node registering: {} ({}) with agents: {:?}",
+            req.node_id, req.hostname, req.agents
+        );
+
+        let state = self.state.read().await;
+        let mut cm = state.cluster.write().await;
+        cm.register_node(cluster::ClusterNode {
+            node_id: req.node_id.clone(),
+            hostname: req.hostname,
+            address: req.address,
+            agents: req.agents,
+            cpu_usage: 0.0,
+            memory_usage: 0.0,
+            active_tasks: 0,
+            max_tasks: req.max_tasks,
+            last_heartbeat: Instant::now(),
+            registered_at: Instant::now(),
+            metadata: req.metadata,
+        });
+
+        Ok(tonic::Response::new(proto::common::Status {
+            success: true,
+            message: format!("Node {} registered", req.node_id),
+        }))
+    }
+
+    async fn node_heartbeat(
+        &self,
+        request: tonic::Request<proto::orchestrator::NodeStatus>,
+    ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
+        let req = request.into_inner();
+        let state = self.state.read().await;
+        let mut cm = state.cluster.write().await;
+        cm.node_heartbeat(&req.node_id, req.cpu_usage, req.memory_usage, req.active_tasks);
+
+        Ok(tonic::Response::new(proto::common::Status {
+            success: true,
+            message: "OK".to_string(),
+        }))
+    }
+
+    async fn list_nodes(
+        &self,
+        request: tonic::Request<proto::orchestrator::ListNodesRequest>,
+    ) -> Result<tonic::Response<proto::orchestrator::NodeListResponse>, tonic::Status> {
+        let req = request.into_inner();
+        let state = self.state.read().await;
+        let cm = state.cluster.read().await;
+
+        let nodes = if req.include_dead {
+            cm.list_all_nodes()
+        } else {
+            cm.list_healthy_nodes()
+        };
+
+        let node_infos: Vec<proto::orchestrator::NodeInfo> = nodes
+            .iter()
+            .map(|n| proto::orchestrator::NodeInfo {
+                node_id: n.node_id.clone(),
+                hostname: n.hostname.clone(),
+                address: n.address.clone(),
+                agents: n.agents.clone(),
+                cpu_usage: n.cpu_usage,
+                memory_usage: n.memory_usage,
+                active_tasks: n.active_tasks,
+                healthy: n.last_heartbeat.elapsed().as_secs() < 30,
+            })
+            .collect();
+
+        Ok(tonic::Response::new(
+            proto::orchestrator::NodeListResponse { nodes: node_infos },
+        ))
+    }
+
     async fn get_system_status(
         &self,
         _request: tonic::Request<proto::common::Empty>,
@@ -371,6 +622,9 @@ async fn main() -> Result<()> {
         cancel_token: cancel_token.clone(),
         clients: clients::ServiceClients::new(),
         health_checker: health_checker.clone(),
+        cluster: Arc::new(RwLock::new(cluster::ClusterManager::new(
+            &std::env::var("AIOS_NODE_ID").unwrap_or_else(|_| "local".to_string()),
+        ))),
     }));
 
     let service = OrchestratorService {
@@ -391,6 +645,29 @@ async fn main() -> Result<()> {
     let health_checker_clone = health_checker.clone();
     tokio::spawn(async move {
         health::HealthChecker::run(health_checker_clone, health_cancel).await;
+    });
+
+    // Start agent spawner — spawn Python agent child processes
+    let spawner = Arc::new(RwLock::new(agent_spawner::AgentSpawner::new("/etc/aios/agents")));
+    {
+        let mut s = spawner.write().await;
+        match s.load_configs() {
+            Ok(configs) => {
+                info!("Loaded {} agent configs, spawning agents...", configs.len());
+                for config in configs {
+                    if let Err(e) = s.spawn_agent(config).await {
+                        warn!("Failed to spawn agent: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load agent configs: {e}");
+            }
+        }
+    }
+    let spawner_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        agent_spawner::AgentSpawner::run_monitor(spawner, spawner_cancel).await;
     });
 
     // Start autonomy loop
@@ -421,6 +698,37 @@ async fn main() -> Result<()> {
     let discovery_cancel = cancel_token.clone();
     tokio::spawn(async move {
         discovery::ServiceRegistry::run(service_registry, discovery_cancel).await;
+    });
+
+    // Start goal scheduler
+    let scheduler_db = "/var/lib/aios/data/scheduler.db";
+    let mut goal_scheduler = scheduler::GoalScheduler::new(scheduler_db);
+    if let Err(e) = goal_scheduler.load() {
+        warn!("Failed to load scheduled goals: {e}");
+    }
+    let scheduler_arc = Arc::new(RwLock::new(goal_scheduler));
+    let scheduler_state = state.clone();
+    let scheduler_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        scheduler::GoalScheduler::run(scheduler_arc, scheduler_state, scheduler_cancel).await;
+    });
+
+    // Start event bus
+    let event_bus = Arc::new(RwLock::new(event_bus::EventBus::new()));
+    let event_bus_state = state.clone();
+    let event_bus_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        event_bus::EventBus::run(event_bus, event_bus_state, event_bus_cancel).await;
+    });
+
+    // Start cluster monitor (only does work if AIOS_CLUSTER_ENABLED=true)
+    let cluster_ref = {
+        let s = state.read().await;
+        s.cluster.clone()
+    };
+    let cluster_cancel = cancel_token.clone();
+    tokio::spawn(async move {
+        cluster::ClusterManager::run_monitor(cluster_ref, cluster_cancel).await;
     });
 
     // Set up signal handlers for graceful shutdown

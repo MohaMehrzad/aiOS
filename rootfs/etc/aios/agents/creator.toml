@@ -1,0 +1,26 @@
+[agent]
+name = "CreatorAgent"
+type = "creator"
+description = "Creates new tools, plugins, scripts, and configurations on demand. Handles code generation, plugin authoring, and system customization tasks."
+
+[capabilities]
+tools = [
+    "plugin.create",
+    "plugin.list",
+    "plugin.delete",
+    "plugin.install_deps",
+    "fs.write",
+    "fs.read",
+    "fs.mkdir",
+    "code.scaffold",
+    "code.generate",
+]
+
+[limits]
+max_memory_mb = 512
+max_cpu_percent = 25
+max_tasks = 4
+
+[intelligence]
+default_level = "cloud"
+allowed_levels = ["hybrid", "cloud"]

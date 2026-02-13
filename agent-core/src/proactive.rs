@@ -140,6 +140,128 @@ async fn proactive_check(
             8,
         ));
     }
+
+    // Check inter-service health (uses health checker results)
+    let health_statuses = state_r.health_checker.read().await.get_all_status();
+    let unhealthy: Vec<_> = health_statuses
+        .iter()
+        .filter(|s| !s.healthy && s.consecutive_failures >= 3)
+        .collect();
+    if !unhealthy.is_empty() {
+        let names: Vec<String> = unhealthy.iter().map(|s| s.name.clone()).collect();
+        goals_to_create.push((
+            format!(
+                "Services unhealthy: {}. Restart and investigate root cause.",
+                names.join(", ")
+            ),
+            9,
+        ));
+    }
+
+    // Check certificate expiry (files older than 30 days)
+    let cert_path = "/var/lib/aios/certs/server.crt";
+    if let Ok(meta) = std::fs::metadata(cert_path) {
+        if let Ok(modified) = meta.modified() {
+            if let Ok(age) = modified.elapsed() {
+                let days_old = age.as_secs() / 86400;
+                if days_old > 30 {
+                    goals_to_create.push((
+                        format!(
+                            "TLS certificate is {days_old} days old. Rotate certificates \
+                             using sec.cert_rotate before expiry."
+                        ),
+                        7,
+                    ));
+                }
+            }
+        }
+    }
+
+    // Check backup schedule (last backup timestamp)
+    let backup_status_path = "/var/lib/aios/backup_status.json";
+    if let Ok(contents) = std::fs::read_to_string(backup_status_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&contents) {
+            if let Some(last_ts) = val.get("last_backup_timestamp").and_then(|v| v.as_i64()) {
+                let now_ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let hours_since = (now_ts - last_ts) / 3600;
+                if hours_since > 24 {
+                    goals_to_create.push((
+                        format!(
+                            "No backup in {hours_since} hours. Run system backup \
+                             to protect data and configurations."
+                        ),
+                        6,
+                    ));
+                }
+            }
+        }
+    }
+
+    // Check network connectivity (DNS resolution)
+    let dns_ok = std::process::Command::new("nslookup")
+        .args(["1.1.1.1"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !dns_ok {
+        // Fallback: try ping
+        let ping_ok = std::process::Command::new("ping")
+            .args(["-c", "1", "-W", "2", "1.1.1.1"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ping_ok {
+            goals_to_create.push((
+                "Network connectivity issue: DNS and ping to 1.1.1.1 failed. \
+                 Diagnose network configuration and restore connectivity."
+                    .to_string(),
+                9,
+            ));
+        }
+    }
+
+    // Check for log anomalies (count ERROR/CRITICAL in recent logs)
+    let log_path = "/var/log/aios/orchestrator.log";
+    if let Ok(log_contents) = std::fs::read_to_string(log_path) {
+        let recent_lines: Vec<&str> = log_contents.lines().rev().take(500).collect();
+        let error_count = recent_lines
+            .iter()
+            .filter(|l| l.contains("ERROR") || l.contains("CRITICAL"))
+            .count();
+        if error_count > 50 {
+            goals_to_create.push((
+                format!(
+                    "Log anomaly: {error_count} ERROR/CRITICAL entries in recent logs. \
+                     Investigate root cause and resolve recurring errors."
+                ),
+                7,
+            ));
+        }
+    }
+
+    // Check for available security vulnerabilities (world-writable files in /etc)
+    let ww_count = std::process::Command::new("find")
+        .args(["/etc", "-maxdepth", "2", "-perm", "-o+w", "-type", "f"])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .count()
+        })
+        .unwrap_or(0);
+    if ww_count > 0 {
+        goals_to_create.push((
+            format!(
+                "Security: {ww_count} world-writable files found in /etc. \
+                 Fix file permissions to prevent unauthorized modification."
+            ),
+            8,
+        ));
+    }
+
     drop(state_r);
 
     // Submit goals, deduplicating against active goals

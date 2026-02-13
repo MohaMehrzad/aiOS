@@ -412,6 +412,86 @@ impl Executor {
             "plugin.install_deps".into(),
             Box::new(|input| crate::plugin::create::execute_install_deps(input)),
         );
+        self.handlers.insert(
+            "plugin.from_template".into(),
+            Box::new(|input| crate::plugin::templates::execute(input)),
+        );
+
+        // Security tools (new)
+        self.handlers.insert(
+            "sec.grant".into(),
+            Box::new(|input| crate::sec::grant::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.revoke".into(),
+            Box::new(|input| crate::sec::revoke::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.audit".into(),
+            Box::new(|input| crate::sec::audit::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.scan".into(),
+            Box::new(|input| crate::sec::scan::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.cert_generate".into(),
+            Box::new(|input| crate::sec::cert_generate::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.cert_rotate".into(),
+            Box::new(|input| crate::sec::cert_rotate::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.file_integrity".into(),
+            Box::new(|input| crate::sec::file_integrity::execute(input)),
+        );
+        self.handlers.insert(
+            "sec.scan_rootkits".into(),
+            Box::new(|input| crate::sec::scan_rootkits::execute(input)),
+        );
+
+        // Monitor tools (new)
+        self.handlers.insert(
+            "monitor.ebpf_trace".into(),
+            Box::new(|input| crate::monitor::ebpf::execute(input)),
+        );
+        self.handlers.insert(
+            "monitor.fs_watch".into(),
+            Box::new(|input| crate::monitor::fs_events::execute(input)),
+        );
+
+        // Process tools (new)
+        self.handlers.insert(
+            "process.cgroup".into(),
+            Box::new(|input| crate::process::cgroup::execute(input)),
+        );
+
+        // Container tools
+        self.handlers.insert(
+            "container.create".into(),
+            Box::new(|input| crate::container::create::execute(input)),
+        );
+        self.handlers.insert(
+            "container.start".into(),
+            Box::new(|input| crate::container::start::execute(input)),
+        );
+        self.handlers.insert(
+            "container.stop".into(),
+            Box::new(|input| crate::container::stop::execute(input)),
+        );
+        self.handlers.insert(
+            "container.list".into(),
+            Box::new(|input| crate::container::list::execute(input)),
+        );
+        self.handlers.insert(
+            "container.exec".into(),
+            Box::new(|input| crate::container::exec::execute(input)),
+        );
+        self.handlers.insert(
+            "container.logs".into(),
+            Box::new(|input| crate::container::logs::execute(input)),
+        );
     }
 
     /// Execute a tool through the full pipeline

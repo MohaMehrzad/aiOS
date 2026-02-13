@@ -34,6 +34,7 @@ pub mod git;
 pub mod code;
 pub mod self_update;
 pub mod plugin;
+pub mod container;
 
 pub mod proto {
     pub mod common {
@@ -175,6 +176,74 @@ impl ToolRegistry for ToolRegistryService {
             plugin::scan_and_register_plugins(registry);
         }
 
+        // Plugin chaining: if a plugin succeeded, check metadata for next_plugins
+        if response.success && req.tool_name.starts_with("plugin.") {
+            let short_name = req.tool_name.strip_prefix("plugin.").unwrap_or(&req.tool_name);
+            let meta_path = format!("{}/{}.meta.json", plugin::PLUGIN_DIR, short_name);
+            if let Ok(meta_contents) = std::fs::read_to_string(&meta_path) {
+                if let Ok(meta) = serde_json::from_str::<plugin::PluginMetadata>(&meta_contents) {
+                    if !meta.next_plugins.is_empty() {
+                        info!(
+                            "Plugin chaining: {} -> {:?} (mode: {})",
+                            req.tool_name, meta.next_plugins, meta.output_mode
+                        );
+                        let chain_input = if meta.output_mode == "merge" {
+                            // Merge: combine original input with output
+                            let mut merged = serde_json::from_slice::<serde_json::Value>(
+                                &req.input_json,
+                            )
+                            .unwrap_or(serde_json::Value::Object(Default::default()));
+                            if let Ok(output_val) =
+                                serde_json::from_slice::<serde_json::Value>(&response.output_json)
+                            {
+                                if let (Some(m), Some(o)) =
+                                    (merged.as_object_mut(), output_val.as_object())
+                                {
+                                    for (k, v) in o {
+                                        m.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            }
+                            serde_json::to_vec(&merged).unwrap_or_default()
+                        } else {
+                            // Pipe: pass output as next plugin's input
+                            response.output_json.clone()
+                        };
+
+                        for next_plugin in &meta.next_plugins {
+                            let next_tool = if next_plugin.starts_with("plugin.") {
+                                next_plugin.clone()
+                            } else {
+                                format!("plugin.{next_plugin}")
+                            };
+                            info!("Chaining to: {next_tool}");
+                            let chain_req = proto::tools::ExecuteRequest {
+                                tool_name: next_tool.clone(),
+                                input_json: chain_input.clone(),
+                                agent_id: req.agent_id.clone(),
+                                task_id: req.task_id.clone(),
+                                reason: format!("Chained from {}", req.tool_name),
+                            };
+                            let chain_resp = executor
+                                .execute(registry, audit_log, backup_manager, chain_req)
+                                .await;
+                            match chain_resp {
+                                Ok(r) if r.success => {
+                                    info!("Chained plugin {next_tool} succeeded");
+                                }
+                                Ok(r) => {
+                                    warn!("Chained plugin {next_tool} failed: {}", r.error);
+                                }
+                                Err(e) => {
+                                    warn!("Chained plugin {next_tool} error: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(tonic::Response::new(response))
     }
 
@@ -303,6 +372,8 @@ fn register_builtin_tools(reg: &mut registry::Registry) {
     self_update::register_tools(reg);
     // Plugin meta-tools
     plugin::register_tools(reg);
+    // Container tools (Podman)
+    container::register_tools(reg);
 
     info!("Registered {} built-in tools", reg.tool_count());
 }

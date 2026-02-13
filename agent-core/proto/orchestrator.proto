@@ -18,6 +18,24 @@ service Orchestrator {
 
     // System status
     rpc GetSystemStatus(aios.common.Empty) returns (SystemStatusResponse);
+
+    // Agent task dispatch (polling model)
+    rpc GetAssignedTask(aios.common.AgentId) returns (aios.common.Task);
+    rpc ReportTaskResult(aios.common.TaskResult) returns (aios.common.Status);
+
+    // Capability management
+    rpc RequestCapability(CapabilityRequest) returns (CapabilityResponse);
+    rpc RevokeCapability(CapabilityRevocation) returns (aios.common.Status);
+
+    // Scheduled goals
+    rpc CreateSchedule(CreateScheduleRequest) returns (ScheduleResponse);
+    rpc ListSchedules(aios.common.Empty) returns (ScheduleListResponse);
+    rpc DeleteSchedule(DeleteScheduleRequest) returns (aios.common.Status);
+
+    // Multi-node cluster
+    rpc RegisterNode(NodeRegistration) returns (aios.common.Status);
+    rpc NodeHeartbeat(NodeStatus) returns (aios.common.Status);
+    rpc ListNodes(ListNodesRequest) returns (NodeListResponse);
 }
 
 message SubmitGoalRequest {
@@ -68,4 +86,90 @@ message SystemStatusResponse {
     double memory_total_mb = 7;
     string autonomy_level = 8;
     int64 uptime_seconds = 9;
+}
+
+// Capability management messages
+message CapabilityRequest {
+    string agent_id = 1;
+    repeated string capabilities = 2;
+    string reason = 3;
+    int64 duration_hours = 4;
+}
+
+message CapabilityResponse {
+    bool granted = 1;
+    repeated string capabilities = 2;
+    string expires_at = 3;
+    string denial_reason = 4;
+}
+
+message CapabilityRevocation {
+    string agent_id = 1;
+    repeated string capabilities = 2;
+    bool revoke_all = 3;
+}
+
+// Scheduled goals messages
+message CreateScheduleRequest {
+    string cron_expr = 1;
+    string goal_template = 2;
+    int32 priority = 3;
+}
+
+message ScheduleResponse {
+    string schedule_id = 1;
+    bool success = 2;
+}
+
+message ScheduleListResponse {
+    repeated ScheduleEntry schedules = 1;
+}
+
+message ScheduleEntry {
+    string id = 1;
+    string cron_expr = 2;
+    string goal_template = 3;
+    int32 priority = 4;
+    bool enabled = 5;
+    int64 last_run = 6;
+}
+
+message DeleteScheduleRequest {
+    string schedule_id = 1;
+}
+
+// Multi-node cluster messages
+message NodeRegistration {
+    string node_id = 1;
+    string hostname = 2;
+    string address = 3;
+    repeated string agents = 4;
+    map<string, string> metadata = 5;
+    uint32 max_tasks = 6;
+}
+
+message NodeStatus {
+    string node_id = 1;
+    double cpu_usage = 2;
+    double memory_usage = 3;
+    uint32 active_tasks = 4;
+}
+
+message ListNodesRequest {
+    bool include_dead = 1;
+}
+
+message NodeListResponse {
+    repeated NodeInfo nodes = 1;
+}
+
+message NodeInfo {
+    string node_id = 1;
+    string hostname = 2;
+    string address = 3;
+    repeated string agents = 4;
+    double cpu_usage = 5;
+    double memory_usage = 6;
+    uint32 active_tasks = 7;
+    bool healthy = 8;
 }

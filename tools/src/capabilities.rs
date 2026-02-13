@@ -56,13 +56,14 @@ impl CapabilityChecker {
             "net_read", "net_write", "net_scan",
             "firewall_read", "firewall_manage",
             "pkg_read", "pkg_manage",
-            "sec_read",
+            "sec_read", "sec_manage",
             "monitor_read",
             "hw_read",
             "git_read", "git_write",
             "code_gen",
             "self_read", "self_update",
             "plugin_read", "plugin_manage", "plugin_execute",
+            "container_read", "container_manage",
         ]
         .into_iter()
         .map(String::from)
@@ -120,12 +121,22 @@ impl CapabilityChecker {
             // Security
             ("sec.check_perms", vec!["sec_read"], RiskLevel::Low),
             ("sec.audit_query", vec!["sec_read"], RiskLevel::Low),
+            ("sec.grant", vec!["sec_manage"], RiskLevel::Critical),
+            ("sec.revoke", vec!["sec_manage"], RiskLevel::Critical),
+            ("sec.audit", vec!["sec_read"], RiskLevel::Low),
+            ("sec.scan", vec!["sec_read"], RiskLevel::Medium),
+            ("sec.cert_generate", vec!["sec_manage"], RiskLevel::High),
+            ("sec.cert_rotate", vec!["sec_manage"], RiskLevel::Critical),
+            ("sec.file_integrity", vec!["sec_read"], RiskLevel::Low),
+            ("sec.scan_rootkits", vec!["sec_read"], RiskLevel::Medium),
             // Monitor — all read-only
             ("monitor.cpu", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.memory", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.disk", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.network", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.logs", vec!["monitor_read"], RiskLevel::Low),
+            ("monitor.ebpf_trace", vec!["monitor_read"], RiskLevel::Medium),
+            ("monitor.fs_watch", vec!["monitor_read"], RiskLevel::Low),
             // Hardware
             ("hw.info", vec!["hw_read"], RiskLevel::Low),
             // Web connectivity
@@ -153,11 +164,21 @@ impl CapabilityChecker {
             ("self.health", vec!["self_read"], RiskLevel::Low),
             ("self.update", vec!["self_update"], RiskLevel::Critical),
             ("self.rebuild", vec!["self_update"], RiskLevel::Critical),
+            // Process (cgroup)
+            ("process.cgroup", vec!["process_manage"], RiskLevel::High),
+            // Container tools
+            ("container.create", vec!["container_manage"], RiskLevel::High),
+            ("container.start", vec!["container_manage"], RiskLevel::Medium),
+            ("container.stop", vec!["container_manage"], RiskLevel::Medium),
+            ("container.list", vec!["container_read"], RiskLevel::Low),
+            ("container.exec", vec!["container_manage"], RiskLevel::High),
+            ("container.logs", vec!["container_read"], RiskLevel::Low),
             // Plugin management
             ("plugin.create", vec!["plugin_manage", "fs_write"], RiskLevel::High),
             ("plugin.list", vec!["plugin_read"], RiskLevel::Low),
             ("plugin.delete", vec!["plugin_manage"], RiskLevel::High),
             ("plugin.install_deps", vec!["plugin_manage", "pkg_manage"], RiskLevel::High),
+            ("plugin.from_template", vec!["plugin_manage", "fs_write"], RiskLevel::Medium),
         ];
 
         for (pattern, caps, risk) in requirements {
@@ -405,5 +426,52 @@ mod tests {
         let result = checker.check_permission("agent-y", "plugin.some_tool");
         assert!(!result.allowed);
         assert!(result.missing_capabilities.contains(&"plugin_execute".to_string()));
+    }
+
+    #[test]
+    fn test_new_security_tools_registered() {
+        let checker = CapabilityChecker::new();
+        assert_eq!(checker.get_risk_level("sec.grant"), RiskLevel::Critical);
+        assert_eq!(checker.get_risk_level("sec.revoke"), RiskLevel::Critical);
+        assert_eq!(checker.get_risk_level("sec.audit"), RiskLevel::Low);
+        assert_eq!(checker.get_risk_level("sec.scan"), RiskLevel::Medium);
+        assert_eq!(checker.get_risk_level("sec.cert_generate"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("sec.cert_rotate"), RiskLevel::Critical);
+        assert_eq!(checker.get_risk_level("sec.file_integrity"), RiskLevel::Low);
+        assert_eq!(checker.get_risk_level("sec.scan_rootkits"), RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_new_container_tools_registered() {
+        let checker = CapabilityChecker::new();
+        assert_eq!(checker.get_risk_level("container.create"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("container.start"), RiskLevel::Medium);
+        assert_eq!(checker.get_risk_level("container.stop"), RiskLevel::Medium);
+        assert_eq!(checker.get_risk_level("container.list"), RiskLevel::Low);
+        assert_eq!(checker.get_risk_level("container.exec"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("container.logs"), RiskLevel::Low);
+    }
+
+    #[test]
+    fn test_new_monitor_and_process_tools_registered() {
+        let checker = CapabilityChecker::new();
+        assert_eq!(checker.get_risk_level("monitor.ebpf_trace"), RiskLevel::Medium);
+        assert_eq!(checker.get_risk_level("monitor.fs_watch"), RiskLevel::Low);
+        assert_eq!(checker.get_risk_level("process.cgroup"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("plugin.from_template"), RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_autonomy_loop_has_new_capabilities() {
+        let checker = CapabilityChecker::new();
+        // autonomy-loop should have access to all new tools
+        let result = checker.check_permission("autonomy-loop", "sec.grant");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "container.create");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "monitor.ebpf_trace");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "process.cgroup");
+        assert!(result.allowed);
     }
 }

@@ -431,6 +431,11 @@ impl TaskPlanner {
         }
     }
 
+    /// Get a single task by ID
+    pub fn get_task(&self, task_id: &str) -> Option<&Task> {
+        self.pending_tasks.get(task_id)
+    }
+
     /// Get all tasks for a goal
     pub fn get_tasks_for_goal(&self, goal_id: &str) -> Vec<&Task> {
         self.pending_tasks

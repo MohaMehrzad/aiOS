@@ -147,8 +147,8 @@ pub fn execute_health(input: &[u8]) -> Result<Vec<u8>> {
             ("orchestrator", 50051),
             ("tools", 50052),
             ("memory", 50053),
-            ("runtime", 50054),
-            ("api-gateway", 50055),
+            ("runtime", 50055),
+            ("api-gateway", 50054),
             ("management-console", 9090),
         ];
 

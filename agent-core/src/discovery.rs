@@ -64,10 +64,10 @@ impl ServiceRegistry {
     pub fn register_defaults(&mut self) {
         let defaults = [
             ("orchestrator", "0.0.0.0:50051", "grpc", env!("CARGO_PKG_VERSION")),
-            ("runtime", "0.0.0.0:50052", "grpc", "0.1.0"),
-            ("tools", "0.0.0.0:50053", "grpc", "0.1.0"),
-            ("memory", "0.0.0.0:50054", "grpc", "0.1.0"),
-            ("api-gateway", "0.0.0.0:50055", "grpc", "0.1.0"),
+            ("runtime", "0.0.0.0:50055", "grpc", "0.1.0"),
+            ("tools", "0.0.0.0:50052", "grpc", "0.1.0"),
+            ("memory", "0.0.0.0:50053", "grpc", "0.1.0"),
+            ("api-gateway", "0.0.0.0:50054", "grpc", "0.1.0"),
             ("management", "0.0.0.0:9090", "http", env!("CARGO_PKG_VERSION")),
         ];
 

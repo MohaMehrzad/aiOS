@@ -29,6 +29,7 @@ dashmap = "6"
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 rusqlite = { workspace = true }
+rcgen = "0.13"
 
 [dev-dependencies]
 tempfile = "3"

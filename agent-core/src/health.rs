@@ -34,10 +34,10 @@ impl HealthChecker {
     pub fn new() -> Self {
         let mut services = HashMap::new();
         let default_services = [
-            ("runtime", "127.0.0.1:50052"),
-            ("tools", "127.0.0.1:50053"),
-            ("memory", "127.0.0.1:50054"),
-            ("api-gateway", "127.0.0.1:50055"),
+            ("runtime", "127.0.0.1:50055"),
+            ("tools", "127.0.0.1:50052"),
+            ("memory", "127.0.0.1:50053"),
+            ("api-gateway", "127.0.0.1:50054"),
         ];
 
         for (name, addr) in &default_services {

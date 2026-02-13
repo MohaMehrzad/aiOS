@@ -94,107 +94,124 @@ async fn autonomy_tick(
     let agent_id = state.agent_router.route_task(&task);
 
     if let Some(ref agent_id) = agent_id {
-        // Assign to agent
+        info!("Dispatching task {task_id} to agent {agent_id}");
         state.agent_router.assign_task(agent_id, &task_id);
 
-        // Log the routing decision
         state.decision_logger.log_decision(
             "task_routing",
             &[agent_id.clone()],
-            agent_id,
-            &format!("Routed {} task to agent with matching capabilities", level.as_str()),
+            "agent_dispatch",
+            &format!(
+                "Task {task_id} dispatched to agent {agent_id} (level: {})",
+                level.as_str()
+            ),
             level.as_str(),
             "heuristic",
         );
 
-        debug!("Task {task_id} routed to agent {agent_id}");
-    } else {
-        // No agent available — execute via AI inference
-        match level {
-            IntelligenceLevel::Reactive => {
-                // Handle reactively without AI
-                debug!("Handling reactive task {task_id} with heuristics");
-                state.task_planner.complete_task(
-                    &task_id,
-                    b"{\"result\":\"handled_by_heuristic\"}".to_vec(),
-                );
-                state.goal_engine.complete_task(&goal_id, &task_id);
+        // Agent polls via GetAssignedTask, executes, reports via ReportTaskResult.
+        // Dead agent recovery at the end of this tick handles timeout.
+        return Ok(());
+    }
 
-                // Record result
-                state.result_aggregator.record_result(
-                    &goal_id,
-                    crate::proto::common::TaskResult {
-                        task_id: task_id.clone(),
-                        success: true,
-                        output_json: b"{\"result\":\"heuristic\"}".to_vec(),
-                        error: String::new(),
-                        duration_ms: 0,
-                        tokens_used: 0,
-                        model_used: "heuristic".to_string(),
-                    },
-                );
-            }
-            IntelligenceLevel::Operational | IntelligenceLevel::Tactical => {
-                let mut preferred_provider = get_preferred_provider(&state, &goal_id);
-                let messages = state.goal_engine.get_messages(&goal_id);
+    // No local agent matched — try cluster routing if enabled
+    if std::env::var("AIOS_CLUSTER_ENABLED").unwrap_or_default() == "true" {
+        let cluster_guard = state.cluster.read().await;
+        if let Some(remote_node_id) = state.agent_router.route_task_to_node(&task, &cluster_guard) {
+            drop(cluster_guard);
+            info!("Routing task {task_id} to remote node {remote_node_id}");
 
-                // Default to Qwen3 for task execution — 128K context, follows
-                // tool-calling JSON format. TinyLlama is too small for this.
-                if preferred_provider.is_empty() {
-                    preferred_provider = "qwen3".to_string();
+            let mut remote = crate::remote_exec::RemoteExecutor::new();
+            match remote
+                .submit_remote_goal(
+                    &remote_node_id,
+                    &task.description,
+                    5, // default priority
+                    &format!("cluster:{}", task_id),
+                )
+                .await
+            {
+                Ok(remote_goal_id) => {
+                    info!(
+                        "Task {task_id} submitted to remote node {remote_node_id} as goal {remote_goal_id}"
+                    );
+                    state.task_planner.complete_task(&task_id, Vec::new());
+                    state
+                        .goal_engine
+                        .update_task_status(&goal_id, &task_id, "completed");
+                    state.decision_logger.log_decision(
+                        "task_routing",
+                        &[remote_node_id],
+                        "cluster_dispatch",
+                        &format!("Task {task_id} routed to remote cluster node"),
+                        level.as_str(),
+                        "cluster",
+                    );
+                    return Ok(());
                 }
-
-                let backend = AiBackend::ApiGateway;
-                info!("Routing {} task to API gateway (provider: {preferred_provider})", level.as_str());
-
-                let result = execute_ai_task(
-                    &state.clients,
-                    &task.description,
-                    level.as_str(),
-                    backend,
-                    &preferred_provider,
-                    &messages,
-                )
-                .await;
-
-                handle_ai_result(
-                    &mut state,
-                    &task_id,
-                    &goal_id,
-                    &task.description,
-                    level.as_str(),
-                    result,
-                )
-                .await;
-            }
-            IntelligenceLevel::Strategic => {
-                let preferred_provider = get_preferred_provider(&state, &goal_id);
-                let messages = state.goal_engine.get_messages(&goal_id);
-
-                let result = execute_ai_task(
-                    &state.clients,
-                    &task.description,
-                    level.as_str(),
-                    AiBackend::ApiGateway,
-                    &preferred_provider,
-                    &messages,
-                )
-                .await;
-
-                handle_ai_result(
-                    &mut state,
-                    &task_id,
-                    &goal_id,
-                    &task.description,
-                    level.as_str(),
-                    result,
-                )
-                .await;
+                Err(e) => {
+                    warn!("Remote dispatch failed for {task_id}: {e}, falling back to AI inference");
+                }
             }
         }
     }
 
-    // 4. Check if any goals are complete
+    // No agent matched (local or remote) — execute via AI inference
+    {
+        let mut preferred_provider = get_preferred_provider(&state, &goal_id);
+        let messages = state.goal_engine.get_messages(&goal_id);
+
+        // Default to Qwen3 for task execution — 128K context, follows
+        // tool-calling JSON format. TinyLlama is too small for this.
+        if preferred_provider.is_empty() {
+            preferred_provider = "qwen3".to_string();
+        }
+
+        // Reactive/Operational/Tactical use API gateway;
+        // Strategic also uses API gateway (it can route to Claude/OpenAI)
+        let backend = AiBackend::ApiGateway;
+        info!(
+            "Routing {} task {task_id} to API gateway (provider: {preferred_provider})",
+            level.as_str()
+        );
+
+        let result = execute_ai_task(
+            &state.clients,
+            &task.description,
+            level.as_str(),
+            backend,
+            &preferred_provider,
+            &messages,
+        )
+        .await;
+
+        handle_ai_result(
+            &mut state,
+            &task_id,
+            &goal_id,
+            &task.description,
+            level.as_str(),
+            result,
+        )
+        .await;
+    }
+
+    // 4. Check for stuck agent-assigned tasks (timeout recovery)
+    // If an agent died or got stuck, its tasks would sit in "in_progress"
+    // forever. Detect dead agents and re-queue their tasks.
+    let dead_agents = state.agent_router.dead_agents();
+    for dead_id in &dead_agents {
+        if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
+            warn!(
+                "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
+            );
+            state.agent_router.task_completed(dead_id, false);
+            // Re-queue: mark as pending so the autonomy loop picks it up again
+            state.task_planner.resume_task(&stuck_task_id);
+        }
+    }
+
+    // 5. Check if any goals are complete
     let (goals, _) = state.goal_engine.list_goals("", 100, 0).await;
     for goal in goals {
         if goal.status == "pending" || goal.status == "in_progress" {
@@ -268,12 +285,49 @@ async fn execute_ai_task(
     // Assemble context for the AI call
     let assembler = ContextAssembler::new(4096);
     let context = assembler.assemble_for_task(task_description, intelligence_level, &[], &[]);
-    let system_prompt = match &context {
+    let mut system_prompt = match &context {
         Ok(ctx) => ctx.system_prompt.clone(),
         Err(_) => format!(
             "You are aiOS, an AI-native operating system. Execute this task: {task_description}"
         ),
     };
+
+    // Query memory service for relevant context chunks
+    match clients.memory().await {
+        Ok(mut mem_client) => {
+            let mem_request = tonic::Request::new(crate::proto::memory::ContextRequest {
+                task_description: task_description.to_string(),
+                max_tokens: 2048,
+                memory_tiers: vec![
+                    "operational".to_string(),
+                    "working".to_string(),
+                    "long_term".to_string(),
+                ],
+            });
+            match mem_client.assemble_context(mem_request).await {
+                Ok(response) => {
+                    let chunks = response.into_inner().chunks;
+                    if !chunks.is_empty() {
+                        let mut memory_context = String::from("\n\nRelevant memory context:\n");
+                        for chunk in &chunks {
+                            memory_context.push_str(&format!(
+                                "- [{}] {}\n",
+                                chunk.source, chunk.content
+                            ));
+                        }
+                        system_prompt.push_str(&memory_context);
+                        info!("Assembled {} memory chunks for task context", chunks.len());
+                    }
+                }
+                Err(e) => {
+                    debug!("Memory context assembly unavailable: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Memory service unavailable for context: {e}");
+        }
+    }
 
     let mut prompt = format!("Task: {task_description}\n\n");
 
@@ -350,13 +404,14 @@ async fn execute_ai_task(
         return r;
     }
 
-    // Final fallback: heuristic response
-    warn!("All AI backends unavailable, using heuristic fallback for task");
+    // Final fallback: all backends failed — mark as failure so the task
+    // is NOT silently marked completed with zero work done.
+    warn!("All AI backends unavailable, task will be marked as failed");
     AiInferenceResult {
-        success: true,
-        response_text: format!("{{\"result\":\"heuristic_fallback\",\"task\":\"{task_description}\"}}"),
+        success: false,
+        response_text: "All AI backends are currently unavailable. The task could not be executed.".to_string(),
         tool_calls: vec![],
-        model_used: "heuristic".to_string(),
+        model_used: "none".to_string(),
         tokens_used: 0,
     }
 }
@@ -976,6 +1031,42 @@ async fn handle_ai_result(
         tool_count, result.tokens_used, result.model_used, response_preview
     );
 
+    // If the AI inference itself failed (all backends down), mark the task
+    // as failed rather than silently succeeding or waiting for input.
+    if !result.success && result.tool_calls.is_empty() {
+        let error_msg = if result.response_text.is_empty() {
+            "AI inference failed — all backends unavailable".to_string()
+        } else {
+            result.response_text.clone()
+        };
+
+        state.task_planner.fail_task(task_id, &error_msg);
+        state
+            .goal_engine
+            .update_task_status(goal_id, task_id, "failed");
+        state.goal_engine.add_message(
+            goal_id,
+            "system",
+            &format!("Task failed: {error_msg}"),
+        );
+
+        state.result_aggregator.record_result(
+            goal_id,
+            crate::proto::common::TaskResult {
+                task_id: task_id.to_string(),
+                success: false,
+                output_json: vec![],
+                error: error_msg,
+                duration_ms: 0,
+                tokens_used: result.tokens_used,
+                model_used: result.model_used.clone(),
+            },
+        );
+
+        warn!("Task {task_id} failed: AI inference unsuccessful");
+        return;
+    }
+
     // If AI returned zero tool calls, NEVER auto-complete.
     // An OS should DO things — no tools executed means no work was done.
     // Show the AI's response to the user and await their input.
@@ -1196,6 +1287,7 @@ mod tests {
             cancel_token: CancellationToken::new(),
             clients: crate::clients::ServiceClients::new(),
             health_checker: Arc::new(RwLock::new(crate::health::HealthChecker::new())),
+            cluster: Arc::new(RwLock::new(crate::cluster::ClusterManager::new("test"))),
         }));
 
         let cancel = CancellationToken::new();

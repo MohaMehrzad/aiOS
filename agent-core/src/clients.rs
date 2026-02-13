@@ -4,11 +4,13 @@
 //! runtime, tools, memory, and api-gateway.
 
 use anyhow::{Context, Result};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, RwLock};
 use tonic::transport::{Channel, Endpoint};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use crate::discovery::ServiceRegistry;
 use crate::proto;
 
 /// Holds gRPC client connections to all aiOS services
@@ -21,6 +23,8 @@ pub struct ServiceClients {
     tools_addr: String,
     memory_addr: String,
     api_gateway_addr: String,
+    /// Optional service discovery registry for dynamic address resolution
+    discovery: Option<Arc<RwLock<ServiceRegistry>>>,
 }
 
 impl ServiceClients {
@@ -34,7 +38,31 @@ impl ServiceClients {
             tools_addr: std::env::var("AIOS_TOOLS_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50052".to_string()),
             memory_addr: std::env::var("AIOS_MEMORY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50053".to_string()),
             api_gateway_addr: std::env::var("AIOS_GATEWAY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50054".to_string()),
+            discovery: None,
         }
+    }
+
+    /// Create clients with service discovery support
+    pub fn with_discovery(discovery: Arc<RwLock<ServiceRegistry>>) -> Self {
+        let mut clients = Self::new();
+        clients.discovery = Some(discovery);
+        clients
+    }
+
+    /// Resolve a service address via discovery, falling back to the hardcoded default
+    async fn resolve_addr(&self, service_name: &str, default: &str) -> String {
+        if std::env::var("AIOS_USE_DISCOVERY").unwrap_or_default() != "true" {
+            return default.to_string();
+        }
+        if let Some(ref registry) = self.discovery {
+            let reg = registry.read().await;
+            if let Some(info) = reg.lookup(service_name) {
+                let addr = format!("http://{}", info.address);
+                debug!("Resolved {service_name} via discovery: {addr}");
+                return addr;
+            }
+        }
+        default.to_string()
     }
 
     /// Create a channel with retry logic

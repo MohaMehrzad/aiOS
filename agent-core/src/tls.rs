@@ -46,11 +46,10 @@ impl TlsManager {
         })
     }
 
-    /// Generate self-signed certificates for development/first boot
+    /// Generate real X.509 certificates using rcgen
     ///
-    /// In production, this would use proper certificate generation
-    /// (e.g., via rcgen crate or external CA). For now, creates
-    /// placeholder files that indicate cert generation is needed.
+    /// Creates a self-signed CA and a server certificate signed by that CA.
+    /// SAN entries include localhost and the service name.
     pub fn generate_self_signed(&self, service_name: &str) -> Result<TlsCerts> {
         let certs = self.get_cert_paths()?;
 
@@ -60,40 +59,61 @@ impl TlsManager {
         }
 
         info!(
-            "Generating self-signed certificates for {} in {}",
+            "Generating X.509 certificates for {} in {}",
             service_name,
             self.cert_dir.display()
         );
 
-        // Create placeholder CA cert
-        let ca_content = format!(
-            "# aiOS Self-Signed CA Certificate (placeholder)\n\
-             # Service: {service_name}\n\
-             # Generated: {}\n\
-             # Replace with proper certificates in production\n",
-            chrono::Utc::now().to_rfc3339()
-        );
-        std::fs::write(&certs.ca_cert, &ca_content)
+        // Generate CA certificate
+        let mut ca_params = rcgen::CertificateParams::new(vec!["aiOS CA".to_string()])
+            .context("Failed to create CA params")?;
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
+        ca_params.not_after = rcgen::date_time_ymd(2034, 12, 31);
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "aiOS Root CA");
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::OrganizationName, "aiOS");
+
+        let ca_key = rcgen::KeyPair::generate().context("Failed to generate CA key pair")?;
+        let ca_cert_signed = ca_params
+            .self_signed(&ca_key)
+            .context("Failed to self-sign CA cert")?;
+
+        // Generate server certificate signed by CA
+        let mut server_params =
+            rcgen::CertificateParams::new(vec![service_name.to_string()])
+                .context("Failed to create server params")?;
+        server_params.is_ca = rcgen::IsCa::NoCa;
+        server_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
+        server_params.not_after = rcgen::date_time_ymd(2026, 12, 31);
+        server_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, service_name);
+        server_params.subject_alt_names = vec![
+            rcgen::SanType::DnsName("localhost".try_into().unwrap()),
+        ];
+        // Add service name as SAN if it's a valid DNS name
+        if let Ok(dns_name) = service_name.to_string().try_into() {
+            server_params
+                .subject_alt_names
+                .push(rcgen::SanType::DnsName(dns_name));
+        }
+
+        let server_key =
+            rcgen::KeyPair::generate().context("Failed to generate server key pair")?;
+        let server_cert_signed = server_params
+            .signed_by(&server_key, &ca_cert_signed, &ca_key)
+            .context("Failed to sign server cert")?;
+
+        // Write PEM files
+        std::fs::write(&certs.ca_cert, ca_cert_signed.pem())
             .context("Failed to write CA cert")?;
-
-        // Create placeholder server cert
-        let server_content = format!(
-            "# aiOS Server Certificate (placeholder)\n\
-             # Service: {service_name}\n\
-             # Generated: {}\n",
-            chrono::Utc::now().to_rfc3339()
-        );
-        std::fs::write(&certs.server_cert, &server_content)
+        std::fs::write(&certs.server_cert, server_cert_signed.pem())
             .context("Failed to write server cert")?;
-
-        // Create placeholder server key
-        let key_content = format!(
-            "# aiOS Server Key (placeholder)\n\
-             # Service: {service_name}\n\
-             # Generated: {}\n",
-            chrono::Utc::now().to_rfc3339()
-        );
-        std::fs::write(&certs.server_key, &key_content)
+        std::fs::write(&certs.server_key, server_key.serialize_pem())
             .context("Failed to write server key")?;
 
         // Set restrictive permissions on key file
@@ -105,7 +125,7 @@ impl TlsManager {
                 .context("Failed to set key permissions")?;
         }
 
-        info!("TLS certificates generated successfully");
+        info!("X.509 certificates generated successfully for {service_name}");
         Ok(certs)
     }
 

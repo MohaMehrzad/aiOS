@@ -65,48 +65,72 @@ fn run() -> Result<()> {
         info!("First boot initialization complete");
     }
 
-    // Phase 4: Start services
+    // Phase 4: Start services with AI-driven dependency resolution
     info!("Phase 4: Starting services...");
     let mut supervisor = service::ServiceSupervisor::new(&config);
 
-    // Start aios-runtime (Phase 4+)
-    if Path::new("/usr/sbin/aios-runtime").exists() {
-        info!("Starting aios-runtime...");
-        supervisor.start_service("aios-runtime", "/usr/sbin/aios-runtime", &[])?;
-        supervisor.wait_for_health("aios-runtime", Duration::from_secs(30))?;
-        info!("aios-runtime online");
+    // Service dependency graph: each service lists what it depends on.
+    // The init daemon resolves the start order via topological sort.
+    let services: Vec<(&str, &str, &[&str])> = vec![
+        ("aios-runtime", "/usr/sbin/aios-runtime", &[]),
+        ("aios-memory", "/usr/sbin/aios-memory", &[]),
+        ("aios-tools", "/usr/sbin/aios-tools", &[]),
+        ("aios-api-gateway", "/usr/sbin/aios-api-gateway", &[]),
+        (
+            "aios-orchestrator",
+            "/usr/sbin/aios-orchestrator",
+            &["aios-runtime", "aios-memory", "aios-tools", "aios-api-gateway"],
+        ),
+    ];
+
+    // Topological sort: start services whose dependencies have all been started
+    let mut started: Vec<String> = Vec::new();
+    let mut remaining: Vec<(&str, &str, &[&str])> = services
+        .into_iter()
+        .filter(|(_, path, _)| Path::new(path).exists())
+        .collect();
+
+    let max_rounds = remaining.len() + 1;
+    for _ in 0..max_rounds {
+        if remaining.is_empty() {
+            break;
+        }
+        let mut started_this_round = Vec::new();
+        remaining.retain(|(name, path, deps)| {
+            let deps_met = deps.iter().all(|d| started.contains(&d.to_string()));
+            if deps_met {
+                info!("Starting {} (deps satisfied: {:?})...", name, deps);
+                let timeout = if *name == "aios-runtime" {
+                    Duration::from_secs(30)
+                } else {
+                    Duration::from_secs(10)
+                };
+                match supervisor.start_service(name, path, &[]) {
+                    Ok(_) => {
+                        if let Err(e) = supervisor.wait_for_health(name, timeout) {
+                            warn!("{} health check failed: {e}, continuing...", name);
+                        }
+                        info!("{} online", name);
+                        started_this_round.push(name.to_string());
+                    }
+                    Err(e) => {
+                        warn!("Failed to start {}: {e}", name);
+                    }
+                }
+                false // remove from remaining
+            } else {
+                true // keep in remaining
+            }
+        });
+        started.extend(started_this_round);
     }
 
-    // Start aios-memory (Phase 7+)
-    if Path::new("/usr/sbin/aios-memory").exists() {
-        info!("Starting aios-memory...");
-        supervisor.start_service("aios-memory", "/usr/sbin/aios-memory", &[])?;
-        supervisor.wait_for_health("aios-memory", Duration::from_secs(10))?;
-        info!("aios-memory online");
-    }
-
-    // Start aios-tools (Phase 6+)
-    if Path::new("/usr/sbin/aios-tools").exists() {
-        info!("Starting aios-tools...");
-        supervisor.start_service("aios-tools", "/usr/sbin/aios-tools", &[])?;
-        supervisor.wait_for_health("aios-tools", Duration::from_secs(10))?;
-        info!("aios-tools online");
-    }
-
-    // Start aios-api-gateway (Phase 11+)
-    if Path::new("/usr/sbin/aios-api-gateway").exists() {
-        info!("Starting aios-api-gateway...");
-        supervisor.start_service("aios-api-gateway", "/usr/sbin/aios-api-gateway", &[])?;
-        supervisor.wait_for_health("aios-api-gateway", Duration::from_secs(10))?;
-        info!("aios-api-gateway online");
-    }
-
-    // Start aios-orchestrator (Phase 5+ — starts last, depends on all other services)
-    if Path::new("/usr/sbin/aios-orchestrator").exists() {
-        info!("Starting aios-orchestrator...");
-        supervisor.start_service("aios-orchestrator", "/usr/sbin/aios-orchestrator", &[])?;
-        supervisor.wait_for_health("aios-orchestrator", Duration::from_secs(10))?;
-        info!("aios-orchestrator online");
+    if !remaining.is_empty() {
+        let unstarted: Vec<&str> = remaining.iter().map(|(n, _, _)| *n).collect();
+        warn!(
+            "Services with unmet dependencies not started: {:?}",
+            unstarted
+        );
     }
 
     info!("========================================");

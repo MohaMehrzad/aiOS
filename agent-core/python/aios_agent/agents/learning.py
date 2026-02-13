@@ -611,6 +611,109 @@ class LearningAgent(BaseAgent):
         }
 
     # ------------------------------------------------------------------
+    # Goal suggestions from learned patterns (Phase 4.4)
+    # ------------------------------------------------------------------
+
+    async def analyze_patterns_and_suggest_goals(self) -> list[dict[str, Any]]:
+        """Query memory for high-success patterns and recurring failure clusters,
+        then suggest goals the orchestrator should create proactively."""
+        suggested_goals: list[dict[str, Any]] = []
+
+        # Gather patterns with high confidence
+        pattern_result = await self._analyze_patterns({"min_occurrences": 3})
+        high_confidence_patterns = [
+            p for p in pattern_result.get("patterns", [])
+            if p.get("confidence", 0) >= IMPROVEMENT_CONFIDENCE_THRESHOLD
+        ]
+
+        # Gather tool effectiveness data
+        tool_data = await self._tool_effectiveness({})
+        underperforming_tools = tool_data.get("underperforming", [])
+
+        # Suggest goals for underperforming tools
+        for tool in underperforming_tools:
+            tool_name = tool.get("tool", "unknown")
+            success_rate = tool.get("success_rate", 0)
+            suggested_goals.append({
+                "description": (
+                    f"Investigate poor performance of tool '{tool_name}' "
+                    f"(success rate: {success_rate:.0%}). Consider alternative "
+                    f"approaches or fix underlying issues."
+                ),
+                "priority": 6,
+                "source": f"learning:tool_effectiveness:{tool_name}",
+            })
+
+        # Suggest goals for failure patterns
+        failure_patterns = [
+            p for p in high_confidence_patterns
+            if p.get("success_rate", 1.0) < 0.5
+        ]
+        for pattern in failure_patterns[:3]:
+            suggested_goals.append({
+                "description": (
+                    f"Recurring failure pattern: '{pattern['trigger']}' -> "
+                    f"'{pattern['action']}' fails {1 - pattern['success_rate']:.0%} "
+                    f"of the time ({pattern['occurrences']} occurrences). "
+                    f"Investigate root cause and implement fix."
+                ),
+                "priority": 7,
+                "source": f"learning:failure_pattern:{pattern['trigger']}",
+            })
+
+        # Suggest optimization goals from high-success patterns
+        optimization_patterns = [
+            p for p in high_confidence_patterns
+            if p.get("success_rate", 0) >= 0.9
+            and p.get("occurrences", 0) >= 10
+        ]
+        for pattern in optimization_patterns[:2]:
+            suggested_goals.append({
+                "description": (
+                    f"High-frequency pattern detected: '{pattern['trigger']}' -> "
+                    f"'{pattern['action']}' ({pattern['occurrences']} times, "
+                    f"{pattern['success_rate']:.0%} success). Consider automating "
+                    f"as a scheduled rule or plugin."
+                ),
+                "priority": 4,
+                "source": f"learning:automation:{pattern['trigger']}",
+            })
+
+        # Performance trend goals
+        perf_data = await self._performance_analysis({})
+        for metric_name, analysis in perf_data.get("metrics_analysis", {}).items():
+            if isinstance(analysis, dict):
+                if analysis.get("health") == "critical":
+                    suggested_goals.append({
+                        "description": (
+                            f"Critical metric: {metric_name} at {analysis.get('current', '?')} "
+                            f"(trend: {analysis.get('trend', 'unknown')}). "
+                            f"Take immediate corrective action."
+                        ),
+                        "priority": 9,
+                        "source": f"learning:metric_critical:{metric_name}",
+                    })
+                elif analysis.get("trend") == "increasing" and "percent" in metric_name:
+                    suggested_goals.append({
+                        "description": (
+                            f"Rising metric: {metric_name} trending upward "
+                            f"(current: {analysis.get('current', '?')}). "
+                            f"Investigate and prevent threshold breach."
+                        ),
+                        "priority": 5,
+                        "source": f"learning:trend_rising:{metric_name}",
+                    })
+
+        logger.info("Generated %d goal suggestions from learned patterns", len(suggested_goals))
+
+        await self.store_memory("last_goal_suggestions", {
+            "timestamp": int(time.time()),
+            "suggestions_count": len(suggested_goals),
+        })
+
+        return suggested_goals
+
+    # ------------------------------------------------------------------
     # Background learning cycle
     # ------------------------------------------------------------------
 

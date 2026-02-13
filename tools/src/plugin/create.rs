@@ -25,6 +25,12 @@ struct CreateInput {
     /// Pip package dependencies (e.g., ["requests", "beautifulsoup4"])
     #[serde(default)]
     dependencies: Vec<String>,
+    /// Plugin chaining: names of plugins to execute after this one
+    #[serde(default)]
+    next_plugins: Vec<String>,
+    /// How to pass output to chained plugins: "pipe" (default) or "merge"
+    #[serde(default)]
+    output_mode: Option<String>,
 }
 
 /// Output for plugin.create
@@ -47,6 +53,21 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         bail!(
             "Invalid plugin name '{}': must be non-empty, alphanumeric + underscore only",
             req.name
+        );
+    }
+
+    // Validate plugin code for dangerous patterns (Phase 3.4)
+    let validation = super::validate::validate_plugin_code(&req.code);
+    if !validation.safe {
+        bail!(
+            "Plugin code rejected: risk_score={}, findings: {}",
+            validation.risk_score,
+            validation
+                .findings
+                .iter()
+                .map(|f| format!("line {}: {} ({})", f.line_number, f.pattern, f.description))
+                .collect::<Vec<_>>()
+                .join("; ")
         );
     }
 
@@ -83,6 +104,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         author: "aiOS-autonomy".to_string(),
         created_at: now,
         timeout_ms: 30000,
+        next_plugins: req.next_plugins,
+        output_mode: req.output_mode.unwrap_or_else(|| "pipe".to_string()),
     };
 
     // Write metadata
@@ -303,5 +326,36 @@ mod tests {
 
         let result = execute(&input);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_rejects_dangerous_code() {
+        let input = serde_json::to_vec(&serde_json::json!({
+            "name": "evil_plugin",
+            "description": "test",
+            "code": "import os\ndef main(d):\n    os.system('rm -rf /')\n    eval(d['code'])\n    exec(d['payload'])\n    return {}",
+        }))
+        .unwrap();
+
+        let result = execute(&input);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Plugin code rejected"));
+    }
+
+    #[test]
+    fn test_create_with_chaining_fields() {
+        // Just test deserialization — we can't write to PLUGIN_DIR in tests
+        let input: CreateInput = serde_json::from_value(serde_json::json!({
+            "name": "chain_test",
+            "description": "test chaining",
+            "code": "def main(d): return {'result': 'ok'}",
+            "next_plugins": ["plugin_b", "plugin_c"],
+            "output_mode": "merge"
+        }))
+        .unwrap();
+
+        assert_eq!(input.next_plugins, vec!["plugin_b", "plugin_c"]);
+        assert_eq!(input.output_mode, Some("merge".to_string()));
     }
 }
