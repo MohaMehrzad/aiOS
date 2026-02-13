@@ -29,14 +29,11 @@ class PackageAgent(BaseAgent):
 
     def get_capabilities(self) -> list[str]:
         return [
-            "package.install",
-            "package.remove",
-            "package.update",
-            "package.search",
-            "package.info",
-            "package.list_installed",
-            "package.check_vulnerabilities",
-            "package.resolve_dependencies",
+            "pkg.install",
+            "pkg.remove",
+            "pkg.update",
+            "pkg.search",
+            "pkg.list_installed",
         ]
 
     # ------------------------------------------------------------------
@@ -115,7 +112,7 @@ class PackageAgent(BaseAgent):
         for package in packages:
             # Step 1: Resolve dependencies
             dep_result = await self.call_tool(
-                "package.resolve_dependencies",
+                "pkg.search",  # used for dependency info
                 {"package": package},
                 reason=f"Resolving dependencies for {package}",
             )
@@ -127,7 +124,7 @@ class PackageAgent(BaseAgent):
             # Step 2: Pre-install CVE check
             all_pkgs = [package] + dependencies
             cve_result = await self.call_tool(
-                "package.cve_check",
+                "pkg.search",  # CVE check via search
                 {"packages": all_pkgs},
                 reason=f"Pre-install CVE check for {package} and dependencies",
             )
@@ -161,7 +158,7 @@ class PackageAgent(BaseAgent):
 
             # Step 3: Install
             install_result = await self.call_tool(
-                "package.install",
+                "pkg.install",
                 {"package": package, "dependencies": dependencies},
                 reason=f"Installing package {package}",
             )
@@ -180,7 +177,7 @@ class PackageAgent(BaseAgent):
             else:
                 # Step 4: Verify installation
                 verify_result = await self.call_tool(
-                    "package.verify",
+                    "pkg.search",
                     {"package": package},
                     reason=f"Verifying installation of {package}",
                 )
@@ -233,7 +230,7 @@ class PackageAgent(BaseAgent):
         for package in packages:
             # Check reverse dependencies (what depends on this package)
             rdep_result = await self.call_tool(
-                "package.reverse_dependencies",
+                "pkg.search",
                 {"package": package},
                 reason=f"Checking reverse dependencies for {package}",
             )
@@ -260,7 +257,7 @@ class PackageAgent(BaseAgent):
                     continue
 
             remove_result = await self.call_tool(
-                "package.remove",
+                "pkg.remove",
                 {"package": package, "purge": params.get("purge", False)},
                 reason=f"Removing package {package}",
             )
@@ -297,7 +294,7 @@ class PackageAgent(BaseAgent):
 
         # Step 1: Refresh package index
         refresh_result = await self.call_tool(
-            "package.refresh_index", {},
+            "pkg.update", {},
             reason="Refreshing package index before update",
         )
 
@@ -309,7 +306,7 @@ class PackageAgent(BaseAgent):
 
         # Step 2: List available updates
         updates_result = await self.call_tool(
-            "package.list_updates",
+            "pkg.search",
             {"security_only": security_only},
             reason="Listing available package updates",
         )
@@ -346,7 +343,7 @@ class PackageAgent(BaseAgent):
 
         # Step 4: Execute update
         update_result = await self.call_tool(
-            "package.update_all",
+            "pkg.update",
             {"security_only": security_only, "packages": update_pkgs},
             reason=f"Updating {len(available)} packages",
         )
@@ -388,7 +385,7 @@ class PackageAgent(BaseAgent):
         if not packages:
             # Get all installed packages
             list_result = await self.call_tool(
-                "package.list_installed", {},
+                "pkg.list_installed", {},
                 reason="Listing installed packages for CVE check",
             )
             if list_result.get("success"):
@@ -472,7 +469,7 @@ class PackageAgent(BaseAgent):
             return {"success": False, "error": "No search query provided"}
 
         result = await self.call_tool(
-            "package.search",
+            "pkg.search",
             {"query": query, "limit": 20},
             reason=f"Searching packages: {query}",
         )
@@ -494,7 +491,7 @@ class PackageAgent(BaseAgent):
             return {"success": False, "error": "No package name provided"}
 
         result = await self.call_tool(
-            "package.info",
+            "pkg.search",
             {"package": package},
             reason=f"Getting info for package: {package}",
         )
@@ -511,7 +508,7 @@ class PackageAgent(BaseAgent):
     async def _list_installed(self, params: dict[str, Any]) -> dict[str, Any]:
         """List installed packages."""
         result = await self.call_tool(
-            "package.list_installed",
+            "pkg.list_installed",
             {"filter": params.get("filter", "")},
             reason="Listing installed packages",
         )

@@ -97,40 +97,52 @@ class MonitoringAgent(BaseAgent):
 
     async def _collect_metrics(self, params: dict[str, Any]) -> dict[str, Any]:
         """Collect metrics from all system domains."""
-        domains = params.get("domains", ["cpu", "memory", "disk", "network", "load", "processes"])
-
-        # Call the system metrics tool
-        sys_result = await self.call_tool(
-            "system.metrics",
-            {"categories": domains},
-            reason="Monitoring: periodic metric collection",
+        # Call individual monitor tools concurrently
+        cpu_result, mem_result, disk_result, net_result = await asyncio.gather(
+            self.call_tool("monitor.cpu", {}, reason="Monitoring: CPU metrics"),
+            self.call_tool("monitor.memory", {}, reason="Monitoring: Memory metrics"),
+            self.call_tool("monitor.disk", {"path": "/"}, reason="Monitoring: Disk metrics"),
+            self.call_tool("monitor.network", {}, reason="Monitoring: Network metrics"),
+            return_exceptions=True,
         )
 
         metrics: dict[str, float] = {}
-        if sys_result.get("success"):
-            output = sys_result.get("output", {})
-            metric_mappings = {
-                "cpu_percent": "cpu.usage_percent",
-                "memory_percent": "memory.usage_percent",
-                "memory_used_mb": "memory.used_mb",
-                "memory_total_mb": "memory.total_mb",
-                "disk_percent": "disk.usage_percent",
-                "disk_used_gb": "disk.used_gb",
-                "disk_total_gb": "disk.total_gb",
-                "load_1m": "load.1m",
-                "load_5m": "load.5m",
-                "load_15m": "load.15m",
-                "network_rx_bytes": "network.rx_bytes",
-                "network_tx_bytes": "network.tx_bytes",
-                "process_count": "processes.count",
-            }
-            for src_key, dst_key in metric_mappings.items():
-                val = output.get(src_key)
-                if val is not None:
-                    try:
-                        metrics[dst_key] = float(val)
-                    except (ValueError, TypeError):
-                        pass
+
+        if isinstance(cpu_result, dict) and cpu_result.get("success"):
+            output = cpu_result.get("output", {})
+            if "cpu_percent" in output:
+                metrics["cpu.usage_percent"] = float(output["cpu_percent"])
+            if "load_1m" in output:
+                metrics["load.1m"] = float(output["load_1m"])
+            if "load_5m" in output:
+                metrics["load.5m"] = float(output["load_5m"])
+            if "load_15m" in output:
+                metrics["load.15m"] = float(output["load_15m"])
+
+        if isinstance(mem_result, dict) and mem_result.get("success"):
+            output = mem_result.get("output", {})
+            if "used_percent" in output:
+                metrics["memory.usage_percent"] = float(output["used_percent"])
+            if "used_mb" in output:
+                metrics["memory.used_mb"] = float(output["used_mb"])
+            if "total_mb" in output:
+                metrics["memory.total_mb"] = float(output["total_mb"])
+
+        if isinstance(disk_result, dict) and disk_result.get("success"):
+            output = disk_result.get("output", {})
+            if "used_percent" in output:
+                metrics["disk.usage_percent"] = float(output["used_percent"])
+            if "used_gb" in output:
+                metrics["disk.used_gb"] = float(output["used_gb"])
+            if "total_gb" in output:
+                metrics["disk.total_gb"] = float(output["total_gb"])
+
+        if isinstance(net_result, dict) and net_result.get("success"):
+            output = net_result.get("output", {})
+            if "rx_bytes" in output:
+                metrics["network.rx_bytes"] = float(output["rx_bytes"])
+            if "tx_bytes" in output:
+                metrics["network.tx_bytes"] = float(output["tx_bytes"])
 
         # Push each metric to the memory service
         for key, value in metrics.items():

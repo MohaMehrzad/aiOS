@@ -2,9 +2,9 @@
 SystemAgent — Monitors system health, manages services, and collects metrics.
 
 Capabilities:
-  - CPU / RAM / disk monitoring via the ``system.metrics`` tool
-  - Service health checking via ``system.service_status``
-  - Restarting failed services via ``system.service_restart``
+  - CPU / RAM / disk monitoring via the ``monitor.cpu`` tool
+  - Service health checking via ``service.status``
+  - Restarting failed services via ``service.restart``
   - Continuous health-checking background loop
 """
 
@@ -39,10 +39,10 @@ class SystemAgent(BaseAgent):
     def get_capabilities(self) -> list[str]:
         return [
             "system.health_check",
-            "system.metrics",
+            "monitor.cpu",
             "system.restart_service",
-            "system.service_status",
-            "system.process_list",
+            "service.status",
+            "process.list",
             "system.uptime",
         ]
 
@@ -96,23 +96,24 @@ class SystemAgent(BaseAgent):
 
     async def _check_health(self, params: dict[str, Any]) -> dict[str, Any]:
         """Run a comprehensive health check on the system."""
-        metrics_result = await self.call_tool(
-            "system.metrics",
-            {"categories": ["cpu", "memory", "disk", "load"]},
-            reason="Periodic health check",
+        # Call individual monitor tools (each returns its own metric)
+        cpu_result, mem_result, disk_result = await asyncio.gather(
+            self.call_tool("monitor.cpu", {}, reason="Health check: CPU"),
+            self.call_tool("monitor.memory", {}, reason="Health check: Memory"),
+            self.call_tool("monitor.disk", {"path": "/"}, reason="Health check: Disk"),
+            return_exceptions=True,
         )
 
-        if not metrics_result.get("success"):
-            return {
-                "status": "error",
-                "message": f"Failed to collect metrics: {metrics_result.get('error', 'unknown')}",
-                "healthy": False,
-            }
+        cpu_pct = 0.0
+        mem_pct = 0.0
+        disk_pct = 0.0
 
-        output = metrics_result.get("output", {})
-        cpu_pct = output.get("cpu_percent", 0.0)
-        mem_pct = output.get("memory_percent", 0.0)
-        disk_pct = output.get("disk_percent", 0.0)
+        if isinstance(cpu_result, dict) and cpu_result.get("success"):
+            cpu_pct = cpu_result.get("output", {}).get("cpu_percent", 0.0)
+        if isinstance(mem_result, dict) and mem_result.get("success"):
+            mem_pct = mem_result.get("output", {}).get("used_percent", 0.0)
+        if isinstance(disk_result, dict) and disk_result.get("success"):
+            disk_pct = disk_result.get("output", {}).get("used_percent", 0.0)
 
         issues: list[dict[str, Any]] = []
         severity = "healthy"
@@ -148,7 +149,7 @@ class SystemAgent(BaseAgent):
 
         # Check services
         services_result = await self.call_tool(
-            "system.service_status",
+            "service.status",
             {"all": True},
             reason="Health check — service enumeration",
         )
@@ -223,7 +224,7 @@ class SystemAgent(BaseAgent):
 
         # Check current status first
         status_result = await self.call_tool(
-            "system.service_status",
+            "service.status",
             {"service": service_name},
             reason=f"Pre-restart status check for {service_name}",
         )
@@ -251,14 +252,14 @@ class SystemAgent(BaseAgent):
 
         # Execute restart
         restart_result = await self.call_tool(
-            "system.service_restart",
+            "service.restart",
             {"service": service_name},
             reason=f"Restarting service {service_name} (was: {previous_status})",
         )
 
         if not restart_result.get("success"):
             await self.push_event(
-                "system.service_restart_failed",
+                "service.restart_failed",
                 {"service": service_name, "error": restart_result.get("error", "")},
                 critical=True,
             )
@@ -272,7 +273,7 @@ class SystemAgent(BaseAgent):
         # Verify the service came back up
         await asyncio.sleep(2)
         verify_result = await self.call_tool(
-            "system.service_status",
+            "service.status",
             {"service": service_name},
             reason=f"Post-restart verification for {service_name}",
         )
@@ -281,7 +282,7 @@ class SystemAgent(BaseAgent):
             new_status = verify_result.get("output", {}).get("status", "unknown")
 
         await self.push_event(
-            "system.service_restarted",
+            "service.restarted",
             {
                 "service": service_name,
                 "previous_status": previous_status,
@@ -305,30 +306,37 @@ class SystemAgent(BaseAgent):
 
     async def _get_metrics(self, params: dict[str, Any]) -> dict[str, Any]:
         """Collect and return current system metrics."""
-        categories = params.get("categories", ["cpu", "memory", "disk", "load", "network"])
-
-        result = await self.call_tool(
-            "system.metrics",
-            {"categories": categories},
-            reason="Metrics collection request",
+        cpu_result, mem_result, disk_result = await asyncio.gather(
+            self.call_tool("monitor.cpu", {}, reason="Metrics: CPU"),
+            self.call_tool("monitor.memory", {}, reason="Metrics: Memory"),
+            self.call_tool("monitor.disk", {"path": "/"}, reason="Metrics: Disk"),
+            return_exceptions=True,
         )
 
-        if not result.get("success"):
-            return {"success": False, "error": result.get("error", "Failed to collect metrics")}
+        metrics: dict[str, Any] = {}
 
-        output = result.get("output", {})
+        if isinstance(cpu_result, dict) and cpu_result.get("success"):
+            cpu_output = cpu_result.get("output", {})
+            metrics["cpu_percent"] = cpu_output.get("cpu_percent", 0.0)
+            await self.update_metric("system.cpu_percent", metrics["cpu_percent"])
 
-        # Store key metrics for trending
-        if "cpu_percent" in output:
-            await self.update_metric("system.cpu_percent", output["cpu_percent"])
-        if "memory_percent" in output:
-            await self.update_metric("system.memory_percent", output["memory_percent"])
-        if "disk_percent" in output:
-            await self.update_metric("system.disk_percent", output["disk_percent"])
+        if isinstance(mem_result, dict) and mem_result.get("success"):
+            mem_output = mem_result.get("output", {})
+            metrics["memory_percent"] = mem_output.get("used_percent", 0.0)
+            metrics["memory_used_mb"] = mem_output.get("used_mb", 0)
+            metrics["memory_total_mb"] = mem_output.get("total_mb", 0)
+            await self.update_metric("system.memory_percent", metrics["memory_percent"])
+
+        if isinstance(disk_result, dict) and disk_result.get("success"):
+            disk_output = disk_result.get("output", {})
+            metrics["disk_percent"] = disk_output.get("used_percent", 0.0)
+            metrics["disk_used_gb"] = disk_output.get("used_gb", 0)
+            metrics["disk_total_gb"] = disk_output.get("total_gb", 0)
+            await self.update_metric("system.disk_percent", metrics["disk_percent"])
 
         return {
             "success": True,
-            "metrics": output,
+            "metrics": metrics,
             "timestamp": int(time.time()),
         }
 
@@ -338,7 +346,7 @@ class SystemAgent(BaseAgent):
         limit = params.get("limit", 20)
 
         result = await self.call_tool(
-            "system.process_list",
+            "process.list",
             {"sort_by": sort_by, "limit": limit},
             reason="Process list request",
         )

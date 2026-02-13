@@ -20,6 +20,14 @@ struct OpenAiRequest {
     messages: Vec<OpenAiMessage>,
     max_tokens: i32,
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
+}
+
+#[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    format_type: String,
 }
 
 #[derive(Serialize)]
@@ -125,11 +133,25 @@ impl OpenAiClient {
             content: prompt.to_string(),
         });
 
+        // Enable JSON mode when the prompt instructs JSON output.
+        // This forces OpenAI-compatible APIs to output valid JSON.
+        let response_format = if prompt.contains("valid JSON")
+            || prompt.contains("JSON object")
+            || system_prompt.contains("respond with ONLY valid JSON")
+        {
+            Some(ResponseFormat {
+                format_type: "json_object".to_string(),
+            })
+        } else {
+            None
+        };
+
         let request_body = OpenAiRequest {
             model: self.model.clone(),
             messages,
             max_tokens,
             temperature,
+            response_format,
         };
 
         let start = std::time::Instant::now();

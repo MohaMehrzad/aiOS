@@ -1,11 +1,12 @@
 """
-NetworkAgent — Manages network interfaces, DNS, connectivity, and DHCP.
+NetworkAgent — Manages network interfaces, DNS, connectivity, and firewall.
 
 Capabilities:
-  - Interface configuration (IP, netmask, gateway)
-  - Connectivity monitoring (ping, traceroute, port checks)
-  - DNS management (resolvers, records, cache flushing)
-  - DHCP lease management
+  - Connectivity monitoring (ping, DNS, port checks)
+  - Network interface listing
+  - DNS lookups
+  - Firewall rule management
+  - Network diagnostics
 """
 
 from __future__ import annotations
@@ -32,13 +33,13 @@ class NetworkAgent(BaseAgent):
 
     def get_capabilities(self) -> list[str]:
         return [
-            "network.configure_interface",
-            "network.check_connectivity",
-            "network.manage_dns",
-            "network.manage_dhcp",
-            "network.list_interfaces",
-            "network.diagnose",
-            "network.firewall",
+            "net.interfaces",
+            "net.ping",
+            "net.dns",
+            "net.port_scan",
+            "firewall.rules",
+            "firewall.add_rule",
+            "firewall.delete_rule",
         ]
 
     # ------------------------------------------------------------------
@@ -49,136 +50,42 @@ class NetworkAgent(BaseAgent):
         description = task.get("description", "").lower()
         input_data = task.get("input_json", {}) if isinstance(task.get("input_json"), dict) else {}
 
-        if "interface" in description or "configure" in description or "ip" in description:
-            return await self._configure_interface(input_data)
         if "connect" in description or "ping" in description or "reachab" in description:
             return await self._check_connectivity(input_data)
         if "dns" in description or "resolv" in description or "nameserver" in description:
-            return await self._manage_dns(input_data)
-        if "dhcp" in description or "lease" in description:
-            return await self._manage_dhcp(input_data)
+            return await self._dns_lookup(input_data)
         if "list" in description and ("interface" in description or "nic" in description):
+            return await self._list_interfaces()
+        if "interface" in description:
             return await self._list_interfaces()
         if "diagnos" in description or "troubleshoot" in description:
             return await self._diagnose_network(input_data)
         if "firewall" in description or "iptable" in description or "nftable" in description:
             return await self._manage_firewall(input_data)
+        if "port" in description and ("scan" in description or "check" in description):
+            return await self._port_scan(input_data)
 
         # AI fallback
         decision = await self.think(
             f"Network task received: '{task.get('description', '')}'. "
-            f"Options: configure_interface, check_connectivity, manage_dns, manage_dhcp, "
-            f"list_interfaces, diagnose, manage_firewall. "
+            f"Options: check_connectivity, dns_lookup, list_interfaces, "
+            f"diagnose, manage_firewall, port_scan. "
             f"Which action matches best? Reply with ONLY the action name.",
             level=IntelligenceLevel.REACTIVE,
         )
 
         action = decision.strip().lower()
-        if "interface" in action and "list" not in action:
-            return await self._configure_interface(input_data)
         if "connect" in action or "ping" in action:
             return await self._check_connectivity(input_data)
         if "dns" in action:
-            return await self._manage_dns(input_data)
-        if "dhcp" in action:
-            return await self._manage_dhcp(input_data)
+            return await self._dns_lookup(input_data)
         if "firewall" in action:
             return await self._manage_firewall(input_data)
         if "diagnos" in action:
             return await self._diagnose_network(input_data)
+        if "port" in action:
+            return await self._port_scan(input_data)
         return await self._check_connectivity(input_data)
-
-    # ------------------------------------------------------------------
-    # Interface configuration
-    # ------------------------------------------------------------------
-
-    async def _configure_interface(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Configure a network interface with IP address settings."""
-        interface = params.get("interface", "")
-        ip_address = params.get("ip_address", "")
-        netmask = params.get("netmask", "255.255.255.0")
-        gateway = params.get("gateway", "")
-        action = params.get("action", "configure")  # configure | up | down
-
-        if not interface:
-            interfaces_result = await self.call_tool(
-                "network.list_interfaces", {},
-                reason="No interface specified — listing available interfaces",
-            )
-            available = interfaces_result.get("output", {}).get("interfaces", [])
-            return {
-                "success": False,
-                "error": "No interface specified",
-                "available_interfaces": [iface.get("name", "") for iface in available],
-            }
-
-        if action in ("up", "down"):
-            result = await self.call_tool(
-                "network.interface_control",
-                {"interface": interface, "action": action},
-                reason=f"Bringing interface {interface} {action}",
-            )
-            await self.push_event(
-                "network.interface_changed",
-                {"interface": interface, "action": action, "success": result.get("success", False)},
-            )
-            return {
-                "success": result.get("success", False),
-                "interface": interface,
-                "action": action,
-                "error": result.get("error", ""),
-            }
-
-        if not ip_address:
-            return {"success": False, "error": "No IP address provided for configuration"}
-
-        # Safety check before modifying interface
-        safety = await self.think(
-            f"I am about to configure interface '{interface}' with IP {ip_address}/{netmask}, "
-            f"gateway {gateway}. Is this a valid and safe configuration? "
-            f"Check for RFC compliance and potential conflicts. Answer YES or NO with reason.",
-            level=IntelligenceLevel.OPERATIONAL,
-        )
-
-        if "no" in safety.lower()[:10]:
-            return {
-                "success": False,
-                "error": f"Configuration rejected by safety check: {safety.strip()}",
-                "interface": interface,
-            }
-
-        result = await self.call_tool(
-            "network.configure_interface",
-            {
-                "interface": interface,
-                "ip_address": ip_address,
-                "netmask": netmask,
-                "gateway": gateway,
-            },
-            reason=f"Configuring {interface}: {ip_address}/{netmask} gw {gateway}",
-        )
-
-        if result.get("success"):
-            await self.store_memory(f"interface_config:{interface}", {
-                "ip_address": ip_address,
-                "netmask": netmask,
-                "gateway": gateway,
-                "configured_at": int(time.time()),
-            })
-            await self.push_event(
-                "network.interface_configured",
-                {"interface": interface, "ip": ip_address, "gateway": gateway},
-            )
-
-        return {
-            "success": result.get("success", False),
-            "interface": interface,
-            "ip_address": ip_address,
-            "netmask": netmask,
-            "gateway": gateway,
-            "error": result.get("error", ""),
-            "execution_id": result.get("execution_id", ""),
-        }
 
     # ------------------------------------------------------------------
     # Connectivity checking
@@ -201,7 +108,7 @@ class NetworkAgent(BaseAgent):
         ping_tasks = []
         for target in targets:
             ping_tasks.append(self.call_tool(
-                "network.ping",
+                "net.ping",
                 {"target": target, "count": 3, "timeout_s": 5},
                 reason=f"Connectivity check: ping {target}",
             ))
@@ -228,7 +135,7 @@ class NetworkAgent(BaseAgent):
         dns_tasks = []
         for domain in dns_domains:
             dns_tasks.append(self.call_tool(
-                "network.dns_resolve",
+                "net.dns",
                 {"domain": domain},
                 reason=f"Connectivity check: DNS resolve {domain}",
             ))
@@ -255,7 +162,7 @@ class NetworkAgent(BaseAgent):
             port = check.get("port", 0)
             if host and port:
                 port_result = await self.call_tool(
-                    "network.port_check",
+                    "net.port_scan",
                     {"host": host, "port": port, "timeout_s": 5},
                     reason=f"Connectivity check: port {host}:{port}",
                 )
@@ -282,153 +189,24 @@ class NetworkAgent(BaseAgent):
         }
 
     # ------------------------------------------------------------------
-    # DNS management
+    # DNS lookup
     # ------------------------------------------------------------------
 
-    async def _manage_dns(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Manage DNS configuration: set resolvers, flush cache, add records."""
-        action = params.get("action", "status")
-        resolvers = params.get("resolvers", [])
+    async def _dns_lookup(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Perform DNS lookups."""
         domain = params.get("domain", "")
-        record_type = params.get("record_type", "A")
-        record_value = params.get("record_value", "")
+        if not domain:
+            return {"success": False, "error": "No domain specified"}
 
-        if action == "set_resolvers" and resolvers:
-            result = await self.call_tool(
-                "network.dns_set_resolvers",
-                {"resolvers": resolvers},
-                reason=f"Setting DNS resolvers to {resolvers}",
-            )
-            if result.get("success"):
-                await self.store_memory("dns_resolvers", {
-                    "resolvers": resolvers,
-                    "set_at": int(time.time()),
-                })
-            return {
-                "success": result.get("success", False),
-                "action": "set_resolvers",
-                "resolvers": resolvers,
-                "error": result.get("error", ""),
-            }
-
-        if action == "flush_cache":
-            result = await self.call_tool(
-                "network.dns_flush_cache", {},
-                reason="Flushing DNS cache",
-            )
-            return {
-                "success": result.get("success", False),
-                "action": "flush_cache",
-                "error": result.get("error", ""),
-            }
-
-        if action == "add_record" and domain and record_value:
-            result = await self.call_tool(
-                "network.dns_add_record",
-                {"domain": domain, "type": record_type, "value": record_value},
-                reason=f"Adding DNS record: {domain} {record_type} {record_value}",
-            )
-            return {
-                "success": result.get("success", False),
-                "action": "add_record",
-                "domain": domain,
-                "record_type": record_type,
-                "record_value": record_value,
-                "error": result.get("error", ""),
-            }
-
-        if action == "resolve" and domain:
-            result = await self.call_tool(
-                "network.dns_resolve",
-                {"domain": domain, "type": record_type},
-                reason=f"Resolving {domain} ({record_type})",
-            )
-            return {
-                "success": result.get("success", False),
-                "action": "resolve",
-                "domain": domain,
-                "addresses": result.get("output", {}).get("addresses", []),
-                "error": result.get("error", ""),
-            }
-
-        # Default: get current DNS status
         result = await self.call_tool(
-            "network.dns_status", {},
-            reason="Querying DNS status",
+            "net.dns",
+            {"domain": domain},
+            reason=f"DNS lookup: {domain}",
         )
         return {
             "success": result.get("success", False),
-            "action": "status",
-            "dns_config": result.get("output", {}),
-            "error": result.get("error", ""),
-        }
-
-    # ------------------------------------------------------------------
-    # DHCP management
-    # ------------------------------------------------------------------
-
-    async def _manage_dhcp(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Manage DHCP: request lease, release, renew, show leases."""
-        action = params.get("action", "status")
-        interface = params.get("interface", "")
-
-        if action == "request" and interface:
-            result = await self.call_tool(
-                "network.dhcp_request",
-                {"interface": interface},
-                reason=f"Requesting DHCP lease on {interface}",
-            )
-            if result.get("success"):
-                lease_info = result.get("output", {})
-                await self.store_memory(f"dhcp_lease:{interface}", {
-                    "ip": lease_info.get("ip_address", ""),
-                    "lease_time": lease_info.get("lease_time_s", 0),
-                    "obtained_at": int(time.time()),
-                })
-            return {
-                "success": result.get("success", False),
-                "action": "request",
-                "interface": interface,
-                "lease": result.get("output", {}),
-                "error": result.get("error", ""),
-            }
-
-        if action == "release" and interface:
-            result = await self.call_tool(
-                "network.dhcp_release",
-                {"interface": interface},
-                reason=f"Releasing DHCP lease on {interface}",
-            )
-            return {
-                "success": result.get("success", False),
-                "action": "release",
-                "interface": interface,
-                "error": result.get("error", ""),
-            }
-
-        if action == "renew" and interface:
-            result = await self.call_tool(
-                "network.dhcp_renew",
-                {"interface": interface},
-                reason=f"Renewing DHCP lease on {interface}",
-            )
-            return {
-                "success": result.get("success", False),
-                "action": "renew",
-                "interface": interface,
-                "lease": result.get("output", {}),
-                "error": result.get("error", ""),
-            }
-
-        # Default: show DHCP leases
-        result = await self.call_tool(
-            "network.dhcp_status", {},
-            reason="Listing DHCP leases",
-        )
-        return {
-            "success": result.get("success", False),
-            "action": "status",
-            "leases": result.get("output", {}).get("leases", []),
+            "domain": domain,
+            "addresses": result.get("output", {}).get("addresses", []),
             "error": result.get("error", ""),
         }
 
@@ -439,7 +217,7 @@ class NetworkAgent(BaseAgent):
     async def _list_interfaces(self) -> dict[str, Any]:
         """List all network interfaces and their current status."""
         result = await self.call_tool(
-            "network.list_interfaces", {},
+            "net.interfaces", {},
             reason="Listing network interfaces",
         )
 
@@ -451,6 +229,35 @@ class NetworkAgent(BaseAgent):
             "success": True,
             "interface_count": len(interfaces),
             "interfaces": interfaces,
+        }
+
+    # ------------------------------------------------------------------
+    # Port scanning
+    # ------------------------------------------------------------------
+
+    async def _port_scan(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Scan ports on a target host."""
+        host = params.get("host", "localhost")
+        ports = params.get("ports", [22, 80, 443, 8080, 9090])
+
+        results: list[dict[str, Any]] = []
+        for port in ports:
+            result = await self.call_tool(
+                "net.port_scan",
+                {"host": host, "port": port},
+                reason=f"Port scan: {host}:{port}",
+            )
+            open_status = False
+            if result.get("success"):
+                open_status = result.get("output", {}).get("open", False)
+            results.append({"host": host, "port": port, "open": open_status})
+
+        return {
+            "success": True,
+            "host": host,
+            "ports_scanned": len(ports),
+            "results": results,
+            "open_ports": [r["port"] for r in results if r["open"]],
         }
 
     # ------------------------------------------------------------------
@@ -473,51 +280,29 @@ class NetworkAgent(BaseAgent):
         if not active_interfaces:
             problems.append("No active network interfaces found")
 
-        # Step 2: Ping gateway
-        gw_config = await self.recall_memory("interface_config:eth0")
-        gateway = params.get("gateway", "")
-        if not gateway and isinstance(gw_config, dict):
-            gateway = gw_config.get("gateway", "")
-        if gateway:
-            gw_ping = await self.call_tool(
-                "network.ping", {"target": gateway, "count": 3, "timeout_s": 5},
-                reason=f"Diagnostic: ping gateway {gateway}",
-            )
-            steps_performed.append({"step": "ping_gateway", "result": gw_ping})
-            if not gw_ping.get("success") or not gw_ping.get("output", {}).get("received", 0):
-                problems.append(f"Gateway {gateway} is unreachable")
-
-        # Step 3: Ping external target
+        # Step 2: Ping external target
         ext_ping = await self.call_tool(
-            "network.ping", {"target": target, "count": 3, "timeout_s": 5},
+            "net.ping", {"target": target, "count": 3, "timeout_s": 5},
             reason=f"Diagnostic: ping external {target}",
         )
         steps_performed.append({"step": "ping_external", "result": ext_ping})
         if not ext_ping.get("success") or not ext_ping.get("output", {}).get("received", 0):
             problems.append(f"External target {target} is unreachable")
 
-        # Step 4: DNS resolution
+        # Step 3: DNS resolution
         dns_check = await self.call_tool(
-            "network.dns_resolve", {"domain": "google.com"},
+            "net.dns", {"domain": "google.com"},
             reason="Diagnostic: DNS resolution test",
         )
         steps_performed.append({"step": "dns_resolve", "result": dns_check})
         if not dns_check.get("success"):
             problems.append("DNS resolution is failing")
 
-        # Step 5: Traceroute
-        trace_result = await self.call_tool(
-            "network.traceroute", {"target": target, "max_hops": 15},
-            reason=f"Diagnostic: traceroute to {target}",
-        )
-        steps_performed.append({"step": "traceroute", "result": trace_result})
-
         # Ask AI to summarise the diagnosis
         diagnosis_prompt = (
             f"Network diagnostic results:\n"
             f"Active interfaces: {len(active_interfaces)}\n"
-            f"Problems found: {problems if problems else 'None'}\n"
-            f"Traceroute hops: {trace_result.get('output', {}).get('hops', [])}\n\n"
+            f"Problems found: {problems if problems else 'None'}\n\n"
             f"Provide a brief diagnosis and recommended fix (2-3 sentences)."
         )
         analysis = await self.think(diagnosis_prompt, level=IntelligenceLevel.OPERATIONAL)
@@ -553,7 +338,7 @@ class NetworkAgent(BaseAgent):
                 }
 
             result = await self.call_tool(
-                "network.firewall_add_rule",
+                "firewall.add_rule",
                 {"rule": rule},
                 reason=f"Adding firewall rule: {rule}",
             )
@@ -566,7 +351,7 @@ class NetworkAgent(BaseAgent):
 
         if action == "remove_rule" and rule:
             result = await self.call_tool(
-                "network.firewall_remove_rule",
+                "firewall.delete_rule",
                 {"rule": rule},
                 reason=f"Removing firewall rule: {rule}",
             )
@@ -578,7 +363,7 @@ class NetworkAgent(BaseAgent):
 
         # Default: show current rules
         result = await self.call_tool(
-            "network.firewall_status", {},
+            "firewall.rules", {},
             reason="Listing firewall rules",
         )
         return {

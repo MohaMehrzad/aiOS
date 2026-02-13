@@ -403,10 +403,16 @@ async fn execute_ai_task(
     let context = assembler.assemble_for_task(task_description, intelligence_level, &[], &[]);
     let mut system_prompt = match &context {
         Ok(ctx) => ctx.system_prompt.clone(),
-        Err(_) => format!(
-            "You are aiOS, an AI-native operating system. Execute this task: {task_description}"
-        ),
+        Err(_) => "You are aiOS, an AI-native operating system that executes system tasks by calling tools.".to_string(),
     };
+
+    // Critical: Tell the model in the system prompt to output JSON.
+    // Many models (Qwen3, etc.) follow system prompt instructions more reliably.
+    system_prompt.push_str(
+        "\n\nYou MUST always respond with ONLY a valid JSON object. \
+         Never output natural language, markdown, or explanations outside of JSON. \
+         Your response must contain a \"tool_calls\" array with at least one tool to execute."
+    );
 
     // Query memory service for relevant context chunks
     match clients.memory().await {
@@ -467,24 +473,25 @@ async fn execute_ai_task(
 
     prompt.push_str(
         "IMPORTANT — Self-Evolution:\n\
-         If the task requires capabilities you do NOT currently have, you MUST create\n\
-         a new plugin tool using `plugin.create` and then call it.\n\
-         Never say 'I don't have the tools' — instead, BUILD the tool you need.\n\n\
-         Steps for self-evolution:\n\
-         1. Call plugin.create with {\"name\": \"tool_name\", \"description\": \"what it does\", \"code\": \"def main(input_data: dict) -> dict: ...\", \"capabilities\": [], \"dependencies\": [\"pip_pkg\"]}\n\
-         2. The code must define a `def main(input_data: dict) -> dict` function\n\
-         3. After creation, call the new plugin.tool_name with the actual task input\n\n"
+         If the task requires a tool you do NOT have, create one using plugin.create.\n\
+         The code must define: def main(input_data: dict) -> dict\n\n"
     );
 
     prompt.push_str(
-        "You MUST respond with ONLY a valid JSON object, no other text.\n\
-         If you can execute this task using the tools above, respond with:\n\
-         {\"reasoning\": \"why you chose these actions\", \"tool_calls\": [{\"tool\": \"tool.name\", \"input\": {\"param\": \"value\"}}], \"result\": \"summary\"}\n\n\
-         If the task needs a NEW tool, create it first then call it:\n\
-         {\"reasoning\": \"Need to build a tool for X\", \"tool_calls\": [{\"tool\": \"plugin.create\", \"input\": {\"name\": \"my_tool\", \"description\": \"Does X\", \"code\": \"def main(input_data):\\n    return {}\", \"capabilities\": [], \"dependencies\": []}}, {\"tool\": \"plugin.my_tool\", \"input\": {}}], \"result\": \"Created and executed new tool\"}\n\n\
-         If you need more information from the user before you can act, respond with:\n\
-         {\"needs_clarification\": true, \"questions\": [\"What specific thing do you need?\"]}\n\n\
-         IMPORTANT: You must output ONLY valid JSON. No markdown, no explanation outside JSON."
+        "You MUST respond with ONLY a valid JSON object. No prose, no markdown, no explanation outside JSON.\n\n\
+         FORMAT — Execute tools:\n\
+         {\"reasoning\": \"brief explanation\", \"tool_calls\": [{\"tool\": \"monitor.cpu\", \"input\": {}}, {\"tool\": \"monitor.memory\", \"input\": {}}], \"result\": \"summary of what will be done\"}\n\n\
+         FORMAT — Need user input:\n\
+         {\"needs_clarification\": true, \"questions\": [\"What specific thing?\"]}\n\n\
+         FORMAT — Create new tool then use it:\n\
+         {\"reasoning\": \"Need custom tool\", \"tool_calls\": [{\"tool\": \"plugin.create\", \"input\": {\"name\": \"my_tool\", \"description\": \"Does X\", \"code\": \"def main(input_data):\\n    return {'result': 'done'}\", \"capabilities\": [], \"dependencies\": []}}, {\"tool\": \"plugin.my_tool\", \"input\": {}}], \"result\": \"Created and executed tool\"}\n\n\
+         EXAMPLE — Check CPU usage:\n\
+         {\"reasoning\": \"Using monitor.cpu to get CPU metrics\", \"tool_calls\": [{\"tool\": \"monitor.cpu\", \"input\": {}}], \"result\": \"Checking CPU usage\"}\n\n\
+         RULES:\n\
+         1. ALWAYS include tool_calls array with at least one tool call — never just describe a plan\n\
+         2. Output ONLY valid JSON — no text before or after\n\
+         3. Tool names use namespace.action format (e.g. monitor.cpu, fs.read, net.ping)\n\
+         4. If unsure which tool, use the closest match from the catalog above"
     );
 
     // Try preferred backend first
@@ -734,10 +741,26 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
             }
         }
     } else {
+        // Fallback: try to extract tool calls from "steps", "tools_needed", or "actions" arrays
+        let extracted = extract_tools_from_json_fallback(&parsed);
+        if !extracted.is_empty() {
+            tracing::info!("parse_tool_calls: extracted {} tool calls from JSON fallback fields", extracted.len());
+            return extracted;
+        }
+
         let keys: Vec<&str> = parsed.as_object()
             .map(|o| o.keys().map(|k| k.as_str()).collect())
             .unwrap_or_default();
         tracing::warn!("parse_tool_calls: JSON parsed OK but no tool_calls array. Keys: {keys:?}");
+    }
+
+    // If no tool calls found from JSON, try natural language extraction as last resort
+    if calls.is_empty() {
+        let nl_calls = extract_tools_from_natural_language(response_text);
+        if !nl_calls.is_empty() {
+            tracing::info!("parse_tool_calls: extracted {} tool calls from natural language", nl_calls.len());
+            return nl_calls;
+        }
     }
 
     calls
@@ -860,6 +883,157 @@ fn extract_json_from_text(text: &str) -> Option<serde_json::Value> {
         }
     }
 
+    None
+}
+
+/// Extract tool calls from JSON fields that aren't "tool_calls" (e.g. "steps", "tools_needed", "actions").
+/// Some models output plans in alternative formats — this recovers tool names from those.
+fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallRequest> {
+    let mut calls = Vec::new();
+
+    // Try "steps" array — each step might reference a tool
+    if let Some(steps) = parsed.get("steps").and_then(|v| v.as_array()) {
+        for step in steps {
+            // Step might be {"tool": "monitor.cpu", ...} or {"task": "Call monitor.cpu", ...}
+            if let Some(tool) = step.get("tool").and_then(|v| v.as_str()) {
+                let input = step.get("input").cloned().unwrap_or(serde_json::json!({}));
+                if let Ok(bytes) = serde_json::to_vec(&input) {
+                    calls.push(ToolCallRequest {
+                        tool_name: tool.to_string(),
+                        input_json: bytes,
+                    });
+                }
+            } else {
+                // Try to extract tool name from step description text
+                let text = step.as_str()
+                    .or_else(|| step.get("task").and_then(|v| v.as_str()))
+                    .or_else(|| step.get("description").and_then(|v| v.as_str()))
+                    .or_else(|| step.get("action").and_then(|v| v.as_str()))
+                    .unwrap_or("");
+                calls.extend(extract_tools_from_natural_language(text));
+            }
+        }
+    }
+
+    // Try "tools_needed" array
+    if calls.is_empty() {
+        if let Some(tools) = parsed.get("tools_needed").and_then(|v| v.as_array()) {
+            for tool in tools {
+                if let Some(name) = tool.as_str() {
+                    calls.push(ToolCallRequest {
+                        tool_name: name.to_string(),
+                        input_json: b"{}".to_vec(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Try "actions" array
+    if calls.is_empty() {
+        if let Some(actions) = parsed.get("actions").and_then(|v| v.as_array()) {
+            for action in actions {
+                if let Some(tool) = action.get("tool").and_then(|v| v.as_str()) {
+                    let input = action.get("input").cloned().unwrap_or(serde_json::json!({}));
+                    if let Ok(bytes) = serde_json::to_vec(&input) {
+                        calls.push(ToolCallRequest {
+                            tool_name: tool.to_string(),
+                            input_json: bytes,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    calls
+}
+
+/// Extract tool names from natural language text.
+/// Matches patterns like "Call monitor.cpu", "use fs.read", "execute net.ping".
+fn extract_tools_from_natural_language(text: &str) -> Vec<ToolCallRequest> {
+    let mut calls = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Pattern: "Call tool.name" or "call tool.name" or "Use tool.name" or "Execute tool.name"
+    // Tool names follow the pattern: namespace.action (e.g., monitor.cpu, fs.read, net.ping)
+    for word_idx in 0..text.len() {
+        let remaining = &text[word_idx..];
+        // Look for known trigger words followed by a tool name pattern
+        let trigger_prefixes = ["call ", "Call ", "use ", "Use ", "execute ", "Execute ", "run ", "Run "];
+        for prefix in &trigger_prefixes {
+            if remaining.starts_with(prefix) {
+                let after = &remaining[prefix.len()..];
+                // Extract potential tool name: word.word pattern
+                if let Some(tool_name) = extract_tool_name_at_start(after) {
+                    if !seen.contains(&tool_name) {
+                        seen.insert(tool_name.clone());
+                        calls.push(ToolCallRequest {
+                            tool_name,
+                            input_json: b"{}".to_vec(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Also scan for standalone tool name patterns (namespace.action)
+    // This catches: "monitor.cpu and monitor.memory tools"
+    if calls.is_empty() {
+        let known_namespaces = [
+            "fs", "process", "service", "net", "firewall", "pkg",
+            "sec", "monitor", "hw", "web", "git", "code", "self", "plugin", "container",
+        ];
+        for ns in &known_namespaces {
+            let prefix = format!("{}.", ns);
+            let mut search_from = 0;
+            while let Some(pos) = text[search_from..].find(&prefix) {
+                let abs_pos = search_from + pos;
+                if let Some(tool_name) = extract_tool_name_at_start(&text[abs_pos..]) {
+                    if !seen.contains(&tool_name) {
+                        seen.insert(tool_name.clone());
+                        calls.push(ToolCallRequest {
+                            tool_name,
+                            input_json: b"{}".to_vec(),
+                        });
+                    }
+                }
+                search_from = abs_pos + prefix.len();
+            }
+        }
+    }
+
+    calls
+}
+
+/// Extract a tool name (namespace.action) from the start of text.
+/// Returns None if the text doesn't start with a valid tool name pattern.
+fn extract_tool_name_at_start(text: &str) -> Option<String> {
+    let text = text.trim_start_matches('`');
+    let mut chars = text.chars().peekable();
+    let mut name = String::new();
+    let mut has_dot = false;
+
+    while let Some(&ch) = chars.peek() {
+        if ch.is_alphanumeric() || ch == '_' || (ch == '.' && !has_dot) {
+            if ch == '.' {
+                has_dot = true;
+            }
+            name.push(ch);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    // Must have namespace.action format
+    if has_dot && name.len() >= 3 {
+        let parts: Vec<&str> = name.split('.').collect();
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
+            return Some(name);
+        }
+    }
     None
 }
 
@@ -1188,8 +1362,29 @@ async fn record_ai_result(
 
     // If AI returned zero tool calls, NEVER auto-complete.
     // An OS should DO things — no tools executed means no work was done.
-    // Show the AI's response to the user and await their input.
     if result.tool_calls.is_empty() {
+        // Count how many times we've already asked for input on this goal
+        // to prevent infinite awaiting_input loops
+        let ai_msg_count = state.goal_engine.get_messages(goal_id)
+            .iter()
+            .filter(|m| m.sender == "ai")
+            .count();
+
+        if ai_msg_count >= 3 {
+            // Too many retries — fail the task instead of looping forever
+            let error_msg = "AI was unable to produce executable tool calls after multiple attempts. \
+                             The model may not support the required JSON output format.";
+            state.task_planner.fail_task(task_id, error_msg);
+            state.goal_engine.update_task_status(goal_id, task_id, "failed");
+            state.goal_engine.add_message(
+                goal_id,
+                "system",
+                &format!("Task failed: {error_msg}"),
+            );
+            warn!("Task {task_id}: Failed after {ai_msg_count} attempts without tool calls");
+            return;
+        }
+
         let ai_text = extract_ai_display_text(&result.response_text);
 
         if let Some(clarification) = parse_clarification(&result.response_text) {
@@ -1209,7 +1404,7 @@ async fn record_ai_result(
             .goal_engine
             .update_task_status(goal_id, task_id, "awaiting_input");
 
-        info!("Task {task_id}: No tools executed, awaiting user input");
+        info!("Task {task_id}: No tools executed, awaiting user input (attempt {ai_msg_count})");
         return;
     }
 

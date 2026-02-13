@@ -1,18 +1,17 @@
 """
-SecurityAgent — Intrusion detection, vulnerability scanning, and policy enforcement.
+SecurityAgent — Intrusion detection, vulnerability scanning, and audit monitoring.
 
 Capabilities:
-  - Continuous intrusion detection monitoring
-  - Vulnerability scanning of packages and configurations
-  - Security policy enforcement and compliance checking
-  - Audit log monitoring for suspicious activity
+  - Intrusion detection (suspicious connections, processes, rootkits)
+  - Security scanning (open ports, SUID binaries, file permissions)
   - File integrity checking
+  - Audit log monitoring for suspicious activity
+  - Threat analysis
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import time
@@ -28,20 +27,21 @@ SEVERITY_WEIGHTS = {"critical": 10, "high": 7, "medium": 4, "low": 1, "info": 0}
 
 
 class SecurityAgent(BaseAgent):
-    """Agent responsible for system security: IDS, scanning, and policy enforcement."""
+    """Agent responsible for system security: IDS, scanning, and monitoring."""
 
     def get_agent_type(self) -> str:
         return "security"
 
     def get_capabilities(self) -> list[str]:
         return [
-            "security.scan_vulnerabilities",
-            "security.check_integrity",
-            "security.enforce_policy",
-            "security.audit_logs",
-            "security.intrusion_detection",
-            "security.compliance_check",
-            "security.threat_analysis",
+            "sec.scan",
+            "sec.check_perms",
+            "sec.file_integrity",
+            "sec.scan_rootkits",
+            "sec.audit",
+            "monitor.logs",
+            "net.port_scan",
+            "process.list",
         ]
 
     # ------------------------------------------------------------------
@@ -56,19 +56,19 @@ class SecurityAgent(BaseAgent):
             return await self._scan_vulnerabilities(input_data)
         if "integrity" in description or "checksum" in description or "hash" in description:
             return await self._check_integrity(input_data)
-        if "policy" in description or "enforce" in description or "compliance" in description:
-            return await self._enforce_policy(input_data)
         if "audit" in description or "log" in description:
             return await self._audit_logs(input_data)
         if "intrusion" in description or "ids" in description or "detect" in description:
             return await self._intrusion_check(input_data)
         if "threat" in description or "analys" in description:
             return await self._threat_analysis(input_data)
+        if "permission" in description or "perm" in description:
+            return await self._check_permissions(input_data)
 
         decision = await self.think(
             f"Security task: '{task.get('description', '')}'. "
-            f"Options: scan_vulnerabilities, check_integrity, enforce_policy, "
-            f"audit_logs, intrusion_check, threat_analysis. "
+            f"Options: scan_vulnerabilities, check_integrity, "
+            f"audit_logs, intrusion_check, threat_analysis, check_permissions. "
             f"Which action? Reply with ONLY the action name.",
             level=IntelligenceLevel.REACTIVE,
         )
@@ -78,12 +78,12 @@ class SecurityAgent(BaseAgent):
             return await self._scan_vulnerabilities(input_data)
         if "integr" in action:
             return await self._check_integrity(input_data)
-        if "policy" in action or "enforce" in action:
-            return await self._enforce_policy(input_data)
         if "audit" in action:
             return await self._audit_logs(input_data)
         if "threat" in action:
             return await self._threat_analysis(input_data)
+        if "perm" in action:
+            return await self._check_permissions(input_data)
         return await self._intrusion_check(input_data)
 
     # ------------------------------------------------------------------
@@ -91,63 +91,62 @@ class SecurityAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _scan_vulnerabilities(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Scan for known vulnerabilities in installed packages and configs."""
-        scope = params.get("scope", "full")  # full | packages | configs | network
+        """Scan for security issues: open ports, file permissions, SUID binaries."""
+        scope = params.get("scope", "full")  # full | ports | permissions
         targets = params.get("targets", [])
 
         findings: list[dict[str, Any]] = []
-        scan_tasks: list[tuple[str, Any]] = []
+        scan_results: dict[str, dict[str, Any]] = {}
 
-        # Package vulnerability scan
-        if scope in ("full", "packages"):
-            scan_tasks.append(("packages", self.call_tool(
-                "security.scan_packages",
-                {"targets": targets},
-                reason="Vulnerability scan: installed packages",
-            )))
+        # Security scan (ports, SUID, weak permissions)
+        if scope in ("full", "permissions"):
+            scan_result = await self.call_tool(
+                "sec.scan",
+                {"targets": targets or ["localhost"]},
+                reason="Vulnerability scan: security scan",
+            )
+            scan_results["security_scan"] = scan_result
+            if scan_result.get("success"):
+                for issue in scan_result.get("output", {}).get("findings", []):
+                    findings.append({
+                        "source": "security_scan",
+                        "severity": issue.get("severity", "medium"),
+                        "description": issue.get("description", ""),
+                        "detail": issue.get("detail", ""),
+                    })
 
-        # Configuration scan
-        if scope in ("full", "configs"):
-            scan_tasks.append(("configs", self.call_tool(
-                "security.scan_configs",
-                {"check_permissions": True, "check_defaults": True},
-                reason="Vulnerability scan: system configurations",
-            )))
-
-        # Network exposure scan
-        if scope in ("full", "network"):
-            scan_tasks.append(("network", self.call_tool(
-                "security.scan_ports",
+        # Port scan
+        if scope in ("full", "ports"):
+            port_result = await self.call_tool(
+                "net.port_scan",
                 {"targets": targets or ["localhost"]},
                 reason="Vulnerability scan: open ports",
-            )))
-
-        # Execute all scans concurrently
-        results_map: dict[str, dict[str, Any]] = {}
-        if scan_tasks:
-            gathered = await asyncio.gather(
-                *[task for _, task in scan_tasks],
-                return_exceptions=True,
             )
-            for (label, _), result in zip(scan_tasks, gathered):
-                if isinstance(result, Exception):
-                    results_map[label] = {"success": False, "error": str(result)}
-                else:
-                    results_map[label] = result
-
-        # Aggregate findings
-        for label, res in results_map.items():
-            if res.get("success"):
-                for vuln in res.get("output", {}).get("vulnerabilities", []):
+            scan_results["port_scan"] = port_result
+            if port_result.get("success"):
+                for port_info in port_result.get("output", {}).get("open_ports", []):
                     findings.append({
-                        "source": label,
-                        "id": vuln.get("id", ""),
-                        "cve": vuln.get("cve", ""),
-                        "severity": vuln.get("severity", "unknown"),
-                        "package": vuln.get("package", ""),
-                        "description": vuln.get("description", ""),
-                        "fix_available": vuln.get("fix_available", False),
-                        "fix_version": vuln.get("fix_version", ""),
+                        "source": "port_scan",
+                        "severity": "info",
+                        "description": f"Open port: {port_info.get('port', '?')}/{port_info.get('proto', 'tcp')}",
+                        "detail": port_info.get("service", "unknown"),
+                    })
+
+        # Permission check
+        if scope in ("full", "permissions"):
+            perm_result = await self.call_tool(
+                "sec.check_perms",
+                {"check_permissions": True, "check_defaults": True},
+                reason="Vulnerability scan: file permissions",
+            )
+            scan_results["perm_check"] = perm_result
+            if perm_result.get("success"):
+                for issue in perm_result.get("output", {}).get("issues", []):
+                    findings.append({
+                        "source": "permissions",
+                        "severity": issue.get("severity", "low"),
+                        "description": issue.get("description", ""),
+                        "detail": issue.get("path", ""),
                     })
 
         # Sort by severity
@@ -168,10 +167,9 @@ class SecurityAgent(BaseAgent):
         recommendations: list[str] = []
         if critical_findings:
             analysis = await self.think(
-                f"Security scan found {len(critical_findings)} critical/high vulnerabilities:\n"
+                f"Security scan found {len(critical_findings)} critical/high issues:\n"
                 + "\n".join(
-                    f"- {f.get('cve', 'N/A')}: {f.get('description', '')[:100]} "
-                    f"(pkg: {f.get('package', 'N/A')}, fix: {f.get('fix_version', 'N/A')})"
+                    f"- [{f.get('severity')}] {f.get('description', '')[:100]}"
                     for f in critical_findings[:10]
                 )
                 + "\n\nProvide prioritised remediation steps (one per line, max 5).",
@@ -209,7 +207,7 @@ class SecurityAgent(BaseAgent):
             "risk_percent": round(risk_percent, 1),
             "findings": findings,
             "recommendations": recommendations,
-            "scan_results": {k: {"success": v.get("success", False)} for k, v in results_map.items()},
+            "scan_results": {k: {"success": v.get("success", False)} for k, v in scan_results.items()},
         }
 
     # ------------------------------------------------------------------
@@ -221,13 +219,11 @@ class SecurityAgent(BaseAgent):
         paths = params.get("paths", [
             "/etc/passwd", "/etc/shadow", "/etc/group",
             "/etc/sudoers", "/etc/ssh/sshd_config",
-            "/boot/vmlinuz", "/boot/initrd",
         ])
-        baseline_key = "integrity_baseline"
 
         # Compute current hashes
         hash_result = await self.call_tool(
-            "security.file_hashes",
+            "sec.file_integrity",
             {"paths": paths, "algorithm": "sha256"},
             reason="Computing file integrity hashes",
         )
@@ -238,6 +234,7 @@ class SecurityAgent(BaseAgent):
         current_hashes: dict[str, str] = hash_result.get("output", {}).get("hashes", {})
 
         # Load baseline from memory
+        baseline_key = "integrity_baseline"
         baseline = await self.recall_memory(baseline_key)
         changes: list[dict[str, str]] = []
 
@@ -258,7 +255,6 @@ class SecurityAgent(BaseAgent):
                 if path not in current_hashes:
                     changes.append({"path": path, "type": "deleted"})
         else:
-            # First run — store as baseline
             logger.info("No integrity baseline found — creating initial baseline")
 
         # Update baseline
@@ -268,7 +264,6 @@ class SecurityAgent(BaseAgent):
         })
 
         if changes:
-            # Analyse changes with AI
             analysis = await self.think(
                 f"File integrity check found {len(changes)} changes:\n"
                 + "\n".join(f"- {c['path']}: {c['type']}" for c in changes)
@@ -281,7 +276,7 @@ class SecurityAgent(BaseAgent):
                 "security.integrity_changes",
                 {"changes": changes, "count": len(changes)},
                 critical=any(
-                    c.get("path", "").startswith(("/etc/shadow", "/etc/sudoers", "/boot/"))
+                    c.get("path", "").startswith(("/etc/shadow", "/etc/sudoers"))
                     for c in changes
                     if c["type"] == "modified"
                 ),
@@ -299,111 +294,25 @@ class SecurityAgent(BaseAgent):
         }
 
     # ------------------------------------------------------------------
-    # Policy enforcement
+    # Permission checking
     # ------------------------------------------------------------------
 
-    async def _enforce_policy(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Check and enforce security policies."""
-        policy_name = params.get("policy", "default")
-        enforce = params.get("enforce", False)
-        dry_run = params.get("dry_run", True)
-
-        # Define policies
-        policies: dict[str, list[dict[str, Any]]] = {
-            "default": [
-                {"check": "no_root_ssh", "tool": "security.check_ssh_config", "params": {"check": "permit_root_login"}, "expected": "no"},
-                {"check": "password_min_length", "tool": "security.check_password_policy", "params": {"check": "min_length"}, "expected_min": 8},
-                {"check": "firewall_enabled", "tool": "security.check_firewall_status", "params": {}, "expected": "active"},
-                {"check": "no_empty_passwords", "tool": "security.check_empty_passwords", "params": {}, "expected": 0},
-                {"check": "updates_available", "tool": "security.check_security_updates", "params": {}, "expected_max": 0},
-            ],
-            "strict": [
-                {"check": "no_root_ssh", "tool": "security.check_ssh_config", "params": {"check": "permit_root_login"}, "expected": "no"},
-                {"check": "ssh_key_only", "tool": "security.check_ssh_config", "params": {"check": "password_auth"}, "expected": "no"},
-                {"check": "password_min_length", "tool": "security.check_password_policy", "params": {"check": "min_length"}, "expected_min": 12},
-                {"check": "firewall_enabled", "tool": "security.check_firewall_status", "params": {}, "expected": "active"},
-                {"check": "no_empty_passwords", "tool": "security.check_empty_passwords", "params": {}, "expected": 0},
-                {"check": "selinux_enforcing", "tool": "security.check_selinux", "params": {}, "expected": "enforcing"},
-                {"check": "audit_enabled", "tool": "security.check_audit_status", "params": {}, "expected": "active"},
-            ],
-        }
-
-        checks = policies.get(policy_name, policies["default"])
-        results: list[dict[str, Any]] = []
-        violations: list[dict[str, Any]] = []
-        remediated: list[str] = []
-
-        for check_def in checks:
-            check_name = check_def["check"]
-            tool_result = await self.call_tool(
-                check_def["tool"],
-                check_def.get("params", {}),
-                reason=f"Policy enforcement: {check_name}",
-            )
-
-            compliant = False
-            actual_value: Any = None
-
-            if tool_result.get("success"):
-                actual_value = tool_result.get("output", {}).get("value")
-                if "expected" in check_def:
-                    compliant = str(actual_value).lower() == str(check_def["expected"]).lower()
-                elif "expected_min" in check_def:
-                    try:
-                        compliant = float(actual_value or 0) >= check_def["expected_min"]
-                    except (ValueError, TypeError):
-                        compliant = False
-                elif "expected_max" in check_def:
-                    try:
-                        compliant = float(actual_value or 0) <= check_def["expected_max"]
-                    except (ValueError, TypeError):
-                        compliant = False
-            else:
-                actual_value = f"check_failed: {tool_result.get('error', '')}"
-
-            check_result = {
-                "check": check_name,
-                "compliant": compliant,
-                "actual_value": actual_value,
-                "policy": check_def.get("expected", check_def.get("expected_min", check_def.get("expected_max"))),
-            }
-            results.append(check_result)
-
-            if not compliant:
-                violations.append(check_result)
-                # Attempt remediation if enforcement is enabled
-                if enforce and not dry_run:
-                    fix_result = await self.call_tool(
-                        f"{check_def['tool']}_fix",
-                        check_def.get("params", {}),
-                        reason=f"Auto-remediating policy violation: {check_name}",
-                    )
-                    if fix_result.get("success"):
-                        remediated.append(check_name)
-                        check_result["remediated"] = True
-
-        compliance_pct = (
-            (len(results) - len(violations)) / len(results) * 100 if results else 100.0
+    async def _check_permissions(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Check file and directory permissions for security issues."""
+        result = await self.call_tool(
+            "sec.check_perms",
+            {"check_permissions": True, "check_defaults": True},
+            reason="Security permission check",
         )
 
-        await self.update_metric("security.compliance_percent", compliance_pct)
-        await self.store_memory(f"policy_check:{policy_name}", {
-            "timestamp": int(time.time()),
-            "compliance_percent": compliance_pct,
-            "violations": len(violations),
-        })
+        if not result.get("success"):
+            return {"success": False, "error": result.get("error", "Permission check failed")}
 
+        issues = result.get("output", {}).get("issues", [])
         return {
             "success": True,
-            "policy": policy_name,
-            "total_checks": len(results),
-            "compliant": len(results) - len(violations),
-            "violations": len(violations),
-            "compliance_percent": round(compliance_pct, 1),
-            "results": results,
-            "violation_details": violations,
-            "remediated": remediated,
-            "dry_run": dry_run,
+            "issues_found": len(issues),
+            "issues": issues,
         }
 
     # ------------------------------------------------------------------
@@ -411,16 +320,16 @@ class SecurityAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     async def _audit_logs(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Monitor and analyse audit logs for suspicious activity."""
+        """Monitor and analyse system logs for suspicious activity."""
         timeframe_minutes = params.get("timeframe_minutes", 60)
         log_sources = params.get("sources", ["auth", "syslog", "kernel"])
 
         all_events: list[dict[str, Any]] = []
         for source in log_sources:
             result = await self.call_tool(
-                "security.read_audit_logs",
+                "monitor.logs",
                 {"source": source, "timeframe_minutes": timeframe_minutes},
-                reason=f"Reading audit logs: {source} (last {timeframe_minutes}m)",
+                reason=f"Reading logs: {source} (last {timeframe_minutes}m)",
             )
             if result.get("success"):
                 events = result.get("output", {}).get("events", [])
@@ -502,29 +411,29 @@ class SecurityAgent(BaseAgent):
 
     async def _intrusion_check(self, params: dict[str, Any]) -> dict[str, Any]:
         """Run an intrusion detection check."""
-        # Check for unexpected network connections
+        # Check for unexpected network connections via port scan
         conn_result = await self.call_tool(
-            "security.check_connections",
-            {"check_known_bad": True},
-            reason="IDS: checking network connections",
+            "net.port_scan",
+            {"host": "localhost"},
+            reason="IDS: checking open ports",
         )
-        suspicious_connections: list[dict[str, Any]] = []
+        open_ports: list[dict[str, Any]] = []
         if conn_result.get("success"):
-            suspicious_connections = conn_result.get("output", {}).get("suspicious", [])
+            open_ports = conn_result.get("output", {}).get("open_ports", [])
 
         # Check for unexpected processes
         proc_result = await self.call_tool(
-            "security.check_processes",
-            {"check_signatures": True},
+            "process.list",
+            {"sort_by": "cpu", "limit": 50},
             reason="IDS: checking running processes",
         )
-        suspicious_processes: list[dict[str, Any]] = []
+        processes: list[dict[str, Any]] = []
         if proc_result.get("success"):
-            suspicious_processes = proc_result.get("output", {}).get("suspicious", [])
+            processes = proc_result.get("output", {}).get("processes", [])
 
         # Check for rootkits
         rootkit_result = await self.call_tool(
-            "security.rootkit_check", {},
+            "sec.scan_rootkits", {},
             reason="IDS: rootkit scan",
         )
         rootkit_findings: list[dict[str, Any]] = []
@@ -534,38 +443,38 @@ class SecurityAgent(BaseAgent):
         threat_level = "clean"
         if rootkit_findings:
             threat_level = "critical"
-        elif suspicious_connections or suspicious_processes:
+        elif len(open_ports) > 20:
             threat_level = "suspicious"
 
+        analysis = "No threats detected. System appears clean."
         if threat_level != "clean":
-            analysis = await self.think(
+            analysis_text = await self.think(
                 f"IDS check results:\n"
-                f"- Suspicious connections: {len(suspicious_connections)}\n"
-                f"- Suspicious processes: {len(suspicious_processes)}\n"
+                f"- Open ports: {len(open_ports)}\n"
+                f"- Running processes: {len(processes)}\n"
                 f"- Rootkit findings: {len(rootkit_findings)}\n\n"
-                f"Connections: {json.dumps(suspicious_connections[:5], default=str)}\n"
-                f"Processes: {json.dumps(suspicious_processes[:5], default=str)}\n\n"
+                f"Ports: {json.dumps(open_ports[:10], default=str)}\n"
+                f"Rootkits: {json.dumps(rootkit_findings[:5], default=str)}\n\n"
                 f"Assess the threat and recommend immediate actions.",
                 level=IntelligenceLevel.STRATEGIC,
             )
+            analysis = analysis_text.strip()
 
             await self.push_event(
                 "security.intrusion_detected",
                 {
                     "threat_level": threat_level,
-                    "connections": len(suspicious_connections),
-                    "processes": len(suspicious_processes),
+                    "open_ports": len(open_ports),
+                    "processes": len(processes),
                     "rootkits": len(rootkit_findings),
                 },
                 critical=(threat_level == "critical"),
             )
-        else:
-            analysis = "No threats detected. System appears clean."
 
         return {
             "threat_level": threat_level,
-            "suspicious_connections": suspicious_connections,
-            "suspicious_processes": suspicious_processes,
+            "open_ports": open_ports,
+            "process_count": len(processes),
             "rootkit_findings": rootkit_findings,
             "analysis": analysis.strip(),
         }
@@ -597,7 +506,7 @@ class SecurityAgent(BaseAgent):
             f"- Active audit alerts: {threat_profile['audit_alerts']}\n"
             f"- Failed logins (24h): {threat_profile['failed_logins_24h']}\n"
             f"- Suspicious events: {threat_profile['suspicious_events']}\n"
-            f"- Total vulnerabilities: {vuln_data.get('total_findings', 0)}\n\n"
+            f"- Total findings: {vuln_data.get('total_findings', 0)}\n\n"
             f"Provide:\n1. Overall threat level (low/medium/high/critical)\n"
             f"2. Top 3 risks\n3. Recommended actions",
             level=IntelligenceLevel.STRATEGIC,
@@ -613,7 +522,7 @@ class SecurityAgent(BaseAgent):
             "threat_profile": threat_profile,
             "analysis": analysis.strip(),
             "data_sources": {
-                "vulnerabilities": vuln_data.get("total_findings", 0),
+                "vulnerability_findings": vuln_data.get("total_findings", 0),
                 "integrity_files_checked": integrity_data.get("files_checked", 0),
                 "audit_events_reviewed": audit_data.get("total_events", 0),
             },

@@ -245,13 +245,8 @@ class LearningAgent(BaseAgent):
                     "data_points": len(values),
                 }
 
-        # Get tunable parameters
-        tunable_result = await self.call_tool(
-            "system.get_tunable_params", {},
-            reason="Fetching tunable system parameters for optimization",
-        )
-        if tunable_result.get("success"):
-            current_params = tunable_result.get("output", {}).get("parameters", {})
+        # Note: no dedicated tunable params tool exists yet; skip for now
+        current_params = {}
 
         # Ask AI to suggest parameter changes
         optimization_prompt = (
@@ -302,25 +297,8 @@ class LearningAgent(BaseAgent):
                 continue
 
             # Only auto-apply if confidence is high and within safe bounds
-            if params.get("auto_apply", False):
-                apply_result = await self.call_tool(
-                    "system.set_tunable_param",
-                    {"parameter": param_name, "value": new_value},
-                    reason=f"Optimization: setting {param_name}={new_value}",
-                )
-                if apply_result.get("success"):
-                    applied.append(suggestion)
-                    await self.store_decision(
-                        context=f"Parameter optimization: {param_name}",
-                        options=[str(current_params.get(param_name, "unknown")), str(new_value)],
-                        chosen=str(new_value),
-                        reasoning=suggestion.get("expected_impact", ""),
-                        intelligence_level="strategic",
-                    )
-                else:
-                    skipped.append({**suggestion, "error": apply_result.get("error", "")})
-            else:
-                skipped.append(suggestion)
+            # Auto-apply is not yet supported (no system.set_tunable_param tool)
+            skipped.append(suggestion)
 
         return {
             "success": True,

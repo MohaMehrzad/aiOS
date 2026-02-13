@@ -33,13 +33,12 @@ class StorageAgent(BaseAgent):
 
     def get_capabilities(self) -> list[str]:
         return [
-            "storage.check_disk_health",
-            "storage.create_backup",
-            "storage.restore_backup",
-            "storage.manage_mounts",
-            "storage.filesystem_check",
-            "storage.capacity_report",
-            "storage.smart_data",
+            "monitor.disk",
+            "fs.list",
+            "fs.stat",
+            "fs.disk_usage",
+            "fs.read",
+            "fs.write",
         ]
 
     # ------------------------------------------------------------------
@@ -93,7 +92,7 @@ class StorageAgent(BaseAgent):
         # List block devices if none specified
         if not devices:
             list_result = await self.call_tool(
-                "storage.list_block_devices", {},
+                "fs.list", {},
                 reason="Listing block devices for health check",
             )
             if list_result.get("success"):
@@ -111,7 +110,7 @@ class StorageAgent(BaseAgent):
         for device in devices:
             # Get SMART data
             smart_result = await self.call_tool(
-                "storage.smart_data",
+                "fs.stat",
                 {"device": device},
                 reason=f"Reading SMART data for {device}",
             )
@@ -126,7 +125,7 @@ class StorageAgent(BaseAgent):
 
             # Get I/O stats
             io_result = await self.call_tool(
-                "storage.io_stats",
+                "monitor.disk",
                 {"device": device},
                 reason=f"Reading I/O stats for {device}",
             )
@@ -214,7 +213,7 @@ class StorageAgent(BaseAgent):
 
         # Check destination space
         space_result = await self.call_tool(
-            "storage.check_space",
+            "fs.disk_usage",
             {"path": destination},
             reason=f"Checking backup destination space: {destination}",
         )
@@ -232,7 +231,7 @@ class StorageAgent(BaseAgent):
 
         # Estimate backup size
         estimate_result = await self.call_tool(
-            "storage.estimate_size",
+            "fs.disk_usage",
             {"paths": source_paths, "exclude": exclude_patterns},
             reason="Estimating backup size",
         )
@@ -263,7 +262,7 @@ class StorageAgent(BaseAgent):
 
         # Execute backup
         backup_result = await self.call_tool(
-            "storage.create_backup",
+            "fs.copy",
             {
                 "source_paths": source_paths,
                 "destination": destination,
@@ -336,7 +335,7 @@ class StorageAgent(BaseAgent):
 
         # Verify backup integrity first
         verify_result = await self.call_tool(
-            "storage.verify_backup",
+            "fs.stat",
             {"backup_id": backup_id},
             reason=f"Verifying backup {backup_id} before restore",
         )
@@ -365,7 +364,7 @@ class StorageAgent(BaseAgent):
 
         if dry_run:
             restore_result = await self.call_tool(
-                "storage.restore_backup",
+                "fs.copy",
                 {"backup_id": backup_id, "target_path": target_path, "dry_run": True},
                 reason=f"Dry-run restore of backup {backup_id}",
             )
@@ -379,7 +378,7 @@ class StorageAgent(BaseAgent):
 
         # Actual restore
         restore_result = await self.call_tool(
-            "storage.restore_backup",
+            "fs.copy",
             {"backup_id": backup_id, "target_path": target_path, "dry_run": False},
             reason=f"Restoring backup {backup_id} to {target_path}",
         )
@@ -416,7 +415,7 @@ class StorageAgent(BaseAgent):
 
         if action == "list":
             result = await self.call_tool(
-                "storage.list_mounts", {},
+                "fs.list", {},
                 reason="Listing mount points",
             )
             mounts = result.get("output", {}).get("mounts", []) if result.get("success") else []
@@ -424,7 +423,7 @@ class StorageAgent(BaseAgent):
 
         if action == "mount" and device and mount_point:
             result = await self.call_tool(
-                "storage.mount",
+                "process.spawn",
                 {
                     "device": device,
                     "mount_point": mount_point,
@@ -449,7 +448,7 @@ class StorageAgent(BaseAgent):
 
         if action == "unmount" and mount_point:
             result = await self.call_tool(
-                "storage.unmount",
+                "process.spawn",
                 {"mount_point": mount_point, "force": params.get("force", False)},
                 reason=f"Unmounting {mount_point}",
             )
@@ -462,7 +461,7 @@ class StorageAgent(BaseAgent):
 
         if action == "remount" and mount_point:
             result = await self.call_tool(
-                "storage.remount",
+                "process.spawn",
                 {"mount_point": mount_point, "options": options},
                 reason=f"Remounting {mount_point} with options: {options}",
             )
@@ -489,7 +488,7 @@ class StorageAgent(BaseAgent):
 
         # Warn if mounted
         mount_result = await self.call_tool(
-            "storage.check_mounted",
+            "fs.stat",
             {"device": device},
             reason=f"Checking if {device} is mounted before fsck",
         )
@@ -503,7 +502,7 @@ class StorageAgent(BaseAgent):
             }
 
         result = await self.call_tool(
-            "storage.fsck",
+            "process.spawn",
             {"device": device, "auto_fix": auto_fix},
             reason=f"Running fsck on {device} (auto_fix={auto_fix})",
         )
@@ -535,7 +534,7 @@ class StorageAgent(BaseAgent):
     async def _capacity_report(self, params: dict[str, Any]) -> dict[str, Any]:
         """Generate a storage capacity report."""
         result = await self.call_tool(
-            "storage.capacity_report", {},
+            "fs.disk_usage", {},
             reason="Generating storage capacity report",
         )
 
