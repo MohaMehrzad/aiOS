@@ -57,6 +57,19 @@ impl TaskPlanner {
         }
     }
 
+    /// Load persisted tasks into the planner (called on startup after
+    /// GoalEngine restores from SQLite). This ensures tasks from previous
+    /// sessions are picked up by the autonomy loop.
+    pub fn load_persisted_tasks(&mut self, tasks: Vec<Task>) {
+        let count = tasks.len();
+        for task in tasks {
+            self.pending_tasks.insert(task.id.clone(), task);
+        }
+        if count > 0 {
+            tracing::info!("TaskPlanner loaded {count} persisted tasks");
+        }
+    }
+
     /// Decompose a goal into tasks
     ///
     /// For simple goals, uses heuristic decomposition.

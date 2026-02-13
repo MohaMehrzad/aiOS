@@ -476,6 +476,35 @@ impl GoalEngine {
             .unwrap_or_default()
     }
 
+    /// Get all non-terminal tasks across all goals.
+    /// Used on startup to reload tasks into the TaskPlanner.
+    /// Tasks that were `in_progress` at shutdown are reset to `pending`.
+    pub fn get_all_resumable_tasks(&mut self) -> Vec<Task> {
+        let mut tasks = Vec::new();
+        for task_list in self.goal_tasks.values_mut() {
+            for task in task_list.iter_mut() {
+                match task.status.as_str() {
+                    "pending" | "awaiting_input" => {
+                        tasks.push(task.clone());
+                    }
+                    "in_progress" => {
+                        // Was interrupted by restart — reset to pending
+                        task.status = "pending".to_string();
+                        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                            let _ = db.execute(
+                                "UPDATE tasks SET status = 'pending' WHERE id = ?1",
+                                rusqlite::params![task.id],
+                            );
+                        }
+                        tasks.push(task.clone());
+                    }
+                    _ => {} // completed, failed, cancelled — skip
+                }
+            }
+        }
+        tasks
+    }
+
     /// Update task status within a goal (mirrors task_planner updates)
     pub fn update_task_status(&mut self, goal_id: &str, task_id: &str, status: &str) {
         if let Some(tasks) = self.goal_tasks.get_mut(goal_id) {

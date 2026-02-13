@@ -346,16 +346,24 @@ async fn main() -> Result<()> {
 
     // Initialize state with persistent goal storage
     let db_path = "/var/lib/aios/data/goals.db";
-    let goal_eng = match goal_engine::GoalEngine::with_db(db_path) {
+    let mut goal_eng = match goal_engine::GoalEngine::with_db(db_path) {
         Ok(engine) => engine,
         Err(e) => {
             tracing::warn!("Failed to open goals database at {db_path}: {e}, falling back to in-memory");
             goal_engine::GoalEngine::new()
         }
     };
+    // Create task planner and sync persisted tasks from GoalEngine
+    let mut task_plan = task_planner::TaskPlanner::new();
+    let resumable = goal_eng.get_all_resumable_tasks();
+    if !resumable.is_empty() {
+        info!("Restoring {} tasks from previous session", resumable.len());
+        task_plan.load_persisted_tasks(resumable);
+    }
+
     let state = Arc::new(RwLock::new(OrchestratorState {
         goal_engine: goal_eng,
-        task_planner: task_planner::TaskPlanner::new(),
+        task_planner: task_plan,
         agent_router: agent_router::AgentRouter::new(),
         result_aggregator: result_aggregator::ResultAggregator::new(),
         decision_logger: decision_logger::DecisionLogger::new(),
