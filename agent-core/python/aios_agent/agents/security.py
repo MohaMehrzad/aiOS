@@ -102,7 +102,7 @@ class SecurityAgent(BaseAgent):
         if scope in ("full", "permissions"):
             scan_result = await self.call_tool(
                 "sec.scan",
-                {"targets": targets or ["localhost"]},
+                {},
                 reason="Vulnerability scan: security scan",
             )
             scan_results["security_scan"] = scan_result
@@ -115,28 +115,34 @@ class SecurityAgent(BaseAgent):
                         "detail": issue.get("detail", ""),
                     })
 
-        # Port scan
+        # Port scan — check common ports
         if scope in ("full", "ports"):
-            port_result = await self.call_tool(
-                "net.port_scan",
-                {"targets": targets or ["localhost"]},
-                reason="Vulnerability scan: open ports",
-            )
-            scan_results["port_scan"] = port_result
-            if port_result.get("success"):
-                for port_info in port_result.get("output", {}).get("open_ports", []):
-                    findings.append({
-                        "source": "port_scan",
-                        "severity": "info",
-                        "description": f"Open port: {port_info.get('port', '?')}/{port_info.get('proto', 'tcp')}",
-                        "detail": port_info.get("service", "unknown"),
-                    })
+            common_ports = [22, 80, 443, 8080, 8081, 9090, 50051, 50052, 50053, 50054, 50055]
+            port_tasks = [
+                self.call_tool(
+                    "net.port_scan",
+                    {"host": "localhost", "port": p},
+                    reason=f"Vulnerability scan: port {p}",
+                )
+                for p in common_ports
+            ]
+            port_results = await asyncio.gather(*port_tasks, return_exceptions=True)
+            for port_num, result in zip(common_ports, port_results):
+                if isinstance(result, dict) and result.get("success"):
+                    is_open = result.get("output", {}).get("open", False)
+                    if is_open:
+                        findings.append({
+                            "source": "port_scan",
+                            "severity": "info",
+                            "description": f"Open port: {port_num}/tcp",
+                            "detail": "open",
+                        })
 
         # Permission check
         if scope in ("full", "permissions"):
             perm_result = await self.call_tool(
                 "sec.check_perms",
-                {"check_permissions": True, "check_defaults": True},
+                {"path": "/etc"},
                 reason="Vulnerability scan: file permissions",
             )
             scan_results["perm_check"] = perm_result
@@ -224,7 +230,7 @@ class SecurityAgent(BaseAgent):
         # Compute current hashes
         hash_result = await self.call_tool(
             "sec.file_integrity",
-            {"paths": paths, "algorithm": "sha256"},
+            {"mode": "check", "paths": paths},
             reason="Computing file integrity hashes",
         )
 
@@ -301,7 +307,7 @@ class SecurityAgent(BaseAgent):
         """Check file and directory permissions for security issues."""
         result = await self.call_tool(
             "sec.check_perms",
-            {"check_permissions": True, "check_defaults": True},
+            {"path": "/etc"},
             reason="Security permission check",
         )
 
@@ -328,8 +334,8 @@ class SecurityAgent(BaseAgent):
         for source in log_sources:
             result = await self.call_tool(
                 "monitor.logs",
-                {"source": source, "timeframe_minutes": timeframe_minutes},
-                reason=f"Reading logs: {source} (last {timeframe_minutes}m)",
+                {"service": source, "lines": 200},
+                reason=f"Reading logs: {source}",
             )
             if result.get("success"):
                 events = result.get("output", {}).get("events", [])
@@ -412,19 +418,26 @@ class SecurityAgent(BaseAgent):
     async def _intrusion_check(self, params: dict[str, Any]) -> dict[str, Any]:
         """Run an intrusion detection check."""
         # Check for unexpected network connections via port scan
-        conn_result = await self.call_tool(
-            "net.port_scan",
-            {"host": "localhost"},
-            reason="IDS: checking open ports",
-        )
+        ids_ports = [22, 80, 443, 3306, 5432, 6379, 8080, 8443, 9090]
+        port_tasks = [
+            self.call_tool(
+                "net.port_scan",
+                {"host": "localhost", "port": p},
+                reason=f"IDS: check port {p}",
+            )
+            for p in ids_ports
+        ]
+        port_results = await asyncio.gather(*port_tasks, return_exceptions=True)
         open_ports: list[dict[str, Any]] = []
-        if conn_result.get("success"):
-            open_ports = conn_result.get("output", {}).get("open_ports", [])
+        for port_num, result in zip(ids_ports, port_results):
+            if isinstance(result, dict) and result.get("success"):
+                if result.get("output", {}).get("open", False):
+                    open_ports.append({"port": port_num, "proto": "tcp"})
 
         # Check for unexpected processes
         proc_result = await self.call_tool(
             "process.list",
-            {"sort_by": "cpu", "limit": 50},
+            {},
             reason="IDS: checking running processes",
         )
         processes: list[dict[str, Any]] = []
@@ -456,7 +469,7 @@ class SecurityAgent(BaseAgent):
                 f"Ports: {json.dumps(open_ports[:10], default=str)}\n"
                 f"Rootkits: {json.dumps(rootkit_findings[:5], default=str)}\n\n"
                 f"Assess the threat and recommend immediate actions.",
-                level=IntelligenceLevel.STRATEGIC,
+                level=IntelligenceLevel.TACTICAL,
             )
             analysis = analysis_text.strip()
 
@@ -509,7 +522,7 @@ class SecurityAgent(BaseAgent):
             f"- Total findings: {vuln_data.get('total_findings', 0)}\n\n"
             f"Provide:\n1. Overall threat level (low/medium/high/critical)\n"
             f"2. Top 3 risks\n3. Recommended actions",
-            level=IntelligenceLevel.STRATEGIC,
+            level=IntelligenceLevel.TACTICAL,
         )
 
         await self.store_memory("last_threat_analysis", {

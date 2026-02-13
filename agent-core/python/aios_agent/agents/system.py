@@ -149,8 +149,8 @@ class SystemAgent(BaseAgent):
 
         # Check services
         services_result = await self.call_tool(
-            "service.status",
-            {"all": True},
+            "service.list",
+            {},
             reason="Health check — service enumeration",
         )
         failed_services: list[str] = []
@@ -225,7 +225,7 @@ class SystemAgent(BaseAgent):
         # Check current status first
         status_result = await self.call_tool(
             "service.status",
-            {"service": service_name},
+            {"name": service_name},
             reason=f"Pre-restart status check for {service_name}",
         )
 
@@ -253,7 +253,7 @@ class SystemAgent(BaseAgent):
         # Execute restart
         restart_result = await self.call_tool(
             "service.restart",
-            {"service": service_name},
+            {"name": service_name},
             reason=f"Restarting service {service_name} (was: {previous_status})",
         )
 
@@ -274,7 +274,7 @@ class SystemAgent(BaseAgent):
         await asyncio.sleep(2)
         verify_result = await self.call_tool(
             "service.status",
-            {"service": service_name},
+            {"name": service_name},
             reason=f"Post-restart verification for {service_name}",
         )
         new_status = "unknown"

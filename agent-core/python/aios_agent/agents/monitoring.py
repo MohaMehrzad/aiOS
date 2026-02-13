@@ -156,7 +156,7 @@ class MonitoringAgent(BaseAgent):
 
         await self.push_event(
             "monitoring.metrics_collected",
-            {"metric_count": len(metrics), "domains": domains},
+            {"metric_count": len(metrics)},
         )
 
         return {

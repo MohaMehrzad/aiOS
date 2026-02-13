@@ -109,7 +109,7 @@ class NetworkAgent(BaseAgent):
         for target in targets:
             ping_tasks.append(self.call_tool(
                 "net.ping",
-                {"target": target, "count": 3, "timeout_s": 5},
+                {"host": target, "count": 3},
                 reason=f"Connectivity check: ping {target}",
             ))
 
@@ -136,7 +136,7 @@ class NetworkAgent(BaseAgent):
         for domain in dns_domains:
             dns_tasks.append(self.call_tool(
                 "net.dns",
-                {"domain": domain},
+                {"hostname": domain},
                 reason=f"Connectivity check: DNS resolve {domain}",
             ))
 
@@ -163,7 +163,7 @@ class NetworkAgent(BaseAgent):
             if host and port:
                 port_result = await self.call_tool(
                     "net.port_scan",
-                    {"host": host, "port": port, "timeout_s": 5},
+                    {"host": host, "port": port},
                     reason=f"Connectivity check: port {host}:{port}",
                 )
                 if isinstance(port_result, dict) and port_result.get("success"):
@@ -200,7 +200,7 @@ class NetworkAgent(BaseAgent):
 
         result = await self.call_tool(
             "net.dns",
-            {"domain": domain},
+            {"hostname": domain},
             reason=f"DNS lookup: {domain}",
         )
         return {
@@ -282,7 +282,7 @@ class NetworkAgent(BaseAgent):
 
         # Step 2: Ping external target
         ext_ping = await self.call_tool(
-            "net.ping", {"target": target, "count": 3, "timeout_s": 5},
+            "net.ping", {"host": target, "count": 3},
             reason=f"Diagnostic: ping external {target}",
         )
         steps_performed.append({"step": "ping_external", "result": ext_ping})
@@ -291,7 +291,7 @@ class NetworkAgent(BaseAgent):
 
         # Step 3: DNS resolution
         dns_check = await self.call_tool(
-            "net.dns", {"domain": "google.com"},
+            "net.dns", {"hostname": "google.com"},
             reason="Diagnostic: DNS resolution test",
         )
         steps_performed.append({"step": "dns_resolve", "result": dns_check})
