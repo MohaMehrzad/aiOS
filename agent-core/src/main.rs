@@ -303,12 +303,11 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
 
         // Look up whether this agent has a task assigned
         if let Some(ref task_id) = state.agent_router.get_assigned_task_id(&agent_id) {
-            debug!("Agent {agent_id} has assigned task {task_id}");
             if let Some(task) = state.task_planner.get_task(task_id) {
-                info!("Returning task {task_id} to agent {agent_id}: {}", task.description.chars().take(60).collect::<String>());
+                debug!("Returning task {task_id} to agent {agent_id}");
                 return Ok(tonic::Response::new(task.clone()));
             }
-            warn!("Agent {agent_id} has assigned task {task_id} but task not found in planner!");
+            warn!("Agent {agent_id} has assigned task {task_id} but task not found in planner");
         }
 
         // No task assigned — return empty task (agent should keep polling)
