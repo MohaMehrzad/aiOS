@@ -441,7 +441,7 @@ async fn try_runtime_infer(
                 model: String::new(),
                 prompt: prompt.to_string(),
                 system_prompt: system_prompt.to_string(),
-                max_tokens: 1024,
+                max_tokens: 2048,
                 temperature: 0.3,
                 intelligence_level: "operational".to_string(),
                 requesting_agent: "autonomy-loop".to_string(),
@@ -485,7 +485,7 @@ async fn try_api_gateway_infer_with_provider(
             let request = tonic::Request::new(crate::proto::api_gateway::ApiInferRequest {
                 prompt: prompt.to_string(),
                 system_prompt: system_prompt.to_string(),
-                max_tokens: 2048,
+                max_tokens: 8192,
                 temperature: 0.3,
                 preferred_provider: preferred_provider.to_string(),
                 requesting_agent: "autonomy-loop".to_string(),
