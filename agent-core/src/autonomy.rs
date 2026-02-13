@@ -485,7 +485,7 @@ async fn try_api_gateway_infer_with_provider(
             let request = tonic::Request::new(crate::proto::api_gateway::ApiInferRequest {
                 prompt: prompt.to_string(),
                 system_prompt: system_prompt.to_string(),
-                max_tokens: 8192,
+                max_tokens: 60000,
                 temperature: 0.3,
                 preferred_provider: preferred_provider.to_string(),
                 requesting_agent: "autonomy-loop".to_string(),
@@ -521,11 +521,25 @@ async fn try_api_gateway_infer_with_provider(
 /// Parse tool calls from AI response JSON
 fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
     let mut calls = Vec::new();
+    let text_len = response_text.len();
 
     // Use the robust JSON extractor that handles prose wrappers, markdown fences, etc.
     let parsed = match extract_json_from_text(response_text) {
         Some(v) => v,
-        None => return calls,
+        None => {
+            // Log why parsing failed for debugging
+            let preview: String = response_text.chars().take(200).collect();
+            let suffix: String = response_text.chars().rev().take(100).collect::<String>().chars().rev().collect();
+            tracing::warn!(
+                "parse_tool_calls: JSON extraction failed (len={text_len}). \
+                 Start: {preview:?}... End: ...{suffix:?}"
+            );
+            // Try direct serde parse to get error message
+            if let Err(e) = serde_json::from_str::<serde_json::Value>(response_text.trim()) {
+                tracing::warn!("parse_tool_calls: serde error: {e}");
+            }
+            return calls;
+        }
     };
 
     if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
@@ -544,6 +558,11 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
                 }
             }
         }
+    } else {
+        let keys: Vec<&str> = parsed.as_object()
+            .map(|o| o.keys().map(|k| k.as_str()).collect())
+            .unwrap_or_default();
+        tracing::warn!("parse_tool_calls: JSON parsed OK but no tool_calls array. Keys: {keys:?}");
     }
 
     calls
