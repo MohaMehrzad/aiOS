@@ -135,16 +135,17 @@ async fn autonomy_tick(
                 );
             }
             IntelligenceLevel::Operational | IntelligenceLevel::Tactical => {
-                let preferred_provider = get_preferred_provider(&state, &goal_id);
+                let mut preferred_provider = get_preferred_provider(&state, &goal_id);
                 let messages = state.goal_engine.get_messages(&goal_id);
 
-                // If user selected a specific provider, use API gateway instead of local runtime
-                let backend = if preferred_provider.is_empty() {
-                    AiBackend::LocalRuntime
-                } else {
-                    info!("User selected provider '{preferred_provider}', routing to API gateway");
-                    AiBackend::ApiGateway
-                };
+                // Default to Qwen3 for task execution — 128K context, follows
+                // tool-calling JSON format. TinyLlama is too small for this.
+                if preferred_provider.is_empty() {
+                    preferred_provider = "qwen3".to_string();
+                }
+
+                let backend = AiBackend::ApiGateway;
+                info!("Routing {} task to API gateway (provider: {preferred_provider})", level.as_str());
 
                 let result = execute_ai_task(
                     &state.clients,
@@ -337,8 +338,11 @@ async fn execute_ai_task(
             try_api_gateway_infer_with_provider(clients, &prompt, &system_prompt, preferred_provider).await
         }
         AiBackend::ApiGateway => {
-            info!("API gateway unavailable, falling back to local runtime");
-            try_runtime_infer(clients, &prompt, &system_prompt).await
+            // API gateway already tried all providers (qwen3/claude/openai).
+            // Local runtime (TinyLlama) can't handle tool-calling prompts.
+            // Skip to heuristic fallback.
+            info!("API gateway exhausted all providers, skipping local runtime");
+            None
         }
     };
 

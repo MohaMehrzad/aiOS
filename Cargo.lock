@@ -93,6 +93,7 @@ dependencies = [
  "priority-queue",
  "prost",
  "prost-types",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
