@@ -814,6 +814,90 @@ fn extract_ai_display_text(response_text: &str) -> String {
     }
 }
 
+/// Produce a short human-readable summary of a tool's output.
+/// Never dumps raw code or large JSON blobs into chat.
+fn summarize_tool_output(tool_name: &str, output: Option<&serde_json::Value>) -> String {
+    let output = match output {
+        Some(v) => v,
+        None => return "completed successfully".to_string(),
+    };
+
+    // Plugin tools — extract name + description, skip code
+    if tool_name.starts_with("plugin.create") || tool_name == "plugin.create" {
+        let name = output.get("name").and_then(|v| v.as_str())
+            .or_else(|| output.get("plugin_name").and_then(|v| v.as_str()));
+        let desc = output.get("description").and_then(|v| v.as_str());
+        return match (name, desc) {
+            (Some(n), Some(d)) => format!("Created plugin '{n}' — {d}"),
+            (Some(n), None) => format!("Created plugin '{n}'"),
+            _ => "Plugin created successfully".to_string(),
+        };
+    }
+
+    // Plugin execution — extract the meaningful result
+    if tool_name.starts_with("plugin.") {
+        let plugin_name = tool_name.strip_prefix("plugin.").unwrap_or(tool_name);
+        if let Some(result) = output.get("result") {
+            let s = match result {
+                serde_json::Value::String(s) => s.clone(),
+                other => serde_json::to_string(other).unwrap_or_default(),
+            };
+            let truncated = if s.len() > 300 { format!("{}...", &s[..300]) } else { s };
+            return format!("'{plugin_name}' returned: {truncated}");
+        }
+        return format!("'{plugin_name}' completed successfully").to_string();
+    }
+
+    // For known tool namespaces, produce brief summaries
+    match tool_name {
+        // Filesystem
+        t if t.starts_with("fs.") => {
+            if let Some(path) = output.get("path").and_then(|v| v.as_str()) {
+                return format!("OK ({path})");
+            }
+            "OK".to_string()
+        }
+        // Web tools — extract URL or status
+        t if t.starts_with("web.") => {
+            let url = output.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let status = output.get("status").or_else(|| output.get("status_code"));
+            let body_len = output.get("body").and_then(|v| v.as_str()).map(|s| s.len());
+            let mut summary = String::new();
+            if !url.is_empty() {
+                summary.push_str(url);
+            }
+            if let Some(s) = status {
+                summary.push_str(&format!(" (status: {s})"));
+            }
+            if let Some(len) = body_len {
+                summary.push_str(&format!(" [{len} chars]"));
+            }
+            if summary.is_empty() { "OK".to_string() } else { summary }
+        }
+        // Service management
+        t if t.starts_with("service.") || t.starts_with("process.") => {
+            if let Some(msg) = output.get("message").and_then(|v| v.as_str()) {
+                return msg.to_string();
+            }
+            "OK".to_string()
+        }
+        // Default: extract a "message", "result", or "status" field; otherwise "OK"
+        _ => {
+            for key in &["message", "result", "status", "output"] {
+                if let Some(val) = output.get(*key) {
+                    let s = match val {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => serde_json::to_string(other).unwrap_or_default(),
+                    };
+                    let truncated = if s.len() > 200 { format!("{}...", &s[..200]) } else { s };
+                    return truncated;
+                }
+            }
+            "completed successfully".to_string()
+        }
+    }
+}
+
 /// Build a human-readable summary from the AI response and tool execution results.
 /// This gets posted as an "ai" message so users can see what the AI reasoned and
 /// what tool outputs were produced, instead of just "Task completed".
@@ -841,30 +925,17 @@ fn build_completion_summary(response_text: &str, tool_results: &[serde_json::Val
         }
     }
 
-    // Summarize tool execution results
+    // Summarize tool execution results — brief human-readable, never raw code/JSON
     for tr in tool_results {
         let tool_name = tr.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
         let success = tr.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
 
         if success {
-            // Extract a meaningful snippet from the tool output
-            let output_summary = if let Some(output) = tr.get("output") {
-                let s = match output {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => serde_json::to_string_pretty(other).unwrap_or_default(),
-                };
-                if s.len() > 500 {
-                    format!("{}...", &s[..500])
-                } else {
-                    s
-                }
-            } else {
-                "OK".to_string()
-            };
-            parts.push(format!("**Tool `{tool_name}`:** {output_summary}"));
+            let summary = summarize_tool_output(tool_name, tr.get("output"));
+            parts.push(format!("**{tool_name}**: {summary}"));
         } else {
             let err = tr.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
-            parts.push(format!("**Tool `{tool_name}` failed:** {err}"));
+            parts.push(format!("**{tool_name}** failed: {err}"));
         }
     }
 

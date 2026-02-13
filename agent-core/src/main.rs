@@ -344,9 +344,17 @@ async fn main() -> Result<()> {
     let service_registry = Arc::new(RwLock::new(discovery::ServiceRegistry::new()));
     service_registry.write().await.register_defaults();
 
-    // Initialize state
+    // Initialize state with persistent goal storage
+    let db_path = "/var/lib/aios/data/goals.db";
+    let goal_eng = match goal_engine::GoalEngine::with_db(db_path) {
+        Ok(engine) => engine,
+        Err(e) => {
+            tracing::warn!("Failed to open goals database at {db_path}: {e}, falling back to in-memory");
+            goal_engine::GoalEngine::new()
+        }
+    };
     let state = Arc::new(RwLock::new(OrchestratorState {
-        goal_engine: goal_engine::GoalEngine::new(),
+        goal_engine: goal_eng,
         task_planner: task_planner::TaskPlanner::new(),
         agent_router: agent_router::AgentRouter::new(),
         result_aggregator: result_aggregator::ResultAggregator::new(),

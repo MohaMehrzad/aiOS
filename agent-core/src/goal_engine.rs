@@ -1,9 +1,14 @@
 //! Goal Engine — manages the lifecycle of goals
 //!
 //! Goals flow through: Pending → Planning → InProgress → Completed/Failed
+//!
+//! Storage: HashMap in-memory cache + optional SQLite persistence.
+//! When a db_path is provided, all mutations are written to SQLite so
+//! goals, tasks, and messages survive service restarts.
 
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::proto::common::{Goal, Task};
@@ -22,15 +27,173 @@ pub struct GoalEngine {
     goals: HashMap<String, Goal>,
     goal_tasks: HashMap<String, Vec<Task>>,
     goal_messages: HashMap<String, Vec<GoalMessage>>,
+    /// Optional SQLite connection for persistence (Mutex because Connection is !Send)
+    db: Option<Mutex<rusqlite::Connection>>,
 }
 
 impl GoalEngine {
+    /// Create a new in-memory-only GoalEngine (for tests)
     pub fn new() -> Self {
         Self {
             goals: HashMap::new(),
             goal_tasks: HashMap::new(),
             goal_messages: HashMap::new(),
+            db: None,
         }
+    }
+
+    /// Create a GoalEngine backed by SQLite at the given path.
+    /// Creates the database and tables if they don't exist, then loads all
+    /// existing data into the in-memory cache.
+    pub fn with_db(db_path: &str) -> Result<Self> {
+        // Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(db_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let db = rusqlite::Connection::open(db_path)?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+
+        // Create tables
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS goals (
+                id TEXT PRIMARY KEY,
+                description TEXT NOT NULL,
+                priority INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
+                metadata_json BLOB NOT NULL DEFAULT X''
+            );
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                goal_id TEXT NOT NULL,
+                description TEXT NOT NULL,
+                assigned_agent TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                intelligence_level TEXT NOT NULL DEFAULT '',
+                required_tools TEXT NOT NULL DEFAULT '[]',
+                depends_on TEXT NOT NULL DEFAULT '[]',
+                input_json BLOB NOT NULL DEFAULT X'',
+                output_json BLOB NOT NULL DEFAULT X'',
+                created_at INTEGER NOT NULL DEFAULT 0,
+                started_at INTEGER NOT NULL DEFAULT 0,
+                completed_at INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(goal_id) REFERENCES goals(id)
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                goal_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY(goal_id) REFERENCES goals(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_goal ON messages(goal_id);",
+        )?;
+
+        // Load existing data into cache
+        let mut goals = HashMap::new();
+        let mut goal_tasks: HashMap<String, Vec<Task>> = HashMap::new();
+        let mut goal_messages: HashMap<String, Vec<GoalMessage>> = HashMap::new();
+
+        // Load goals
+        {
+            let mut stmt = db.prepare(
+                "SELECT id, description, priority, source, status, created_at, updated_at, tags, metadata_json FROM goals"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let tags_json: String = row.get(7)?;
+                let tags: Vec<String> =
+                    serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(Goal {
+                    id: row.get(0)?,
+                    description: row.get(1)?,
+                    priority: row.get(2)?,
+                    source: row.get(3)?,
+                    status: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    tags,
+                    metadata_json: row.get(8)?,
+                })
+            })?;
+            for row in rows {
+                let goal = row?;
+                let id = goal.id.clone();
+                goals.insert(id.clone(), goal);
+                goal_tasks.entry(id).or_default();
+            }
+        }
+
+        // Load tasks
+        {
+            let mut stmt = db.prepare(
+                "SELECT id, goal_id, description, assigned_agent, status, intelligence_level, \
+                 required_tools, depends_on, input_json, output_json, created_at, started_at, \
+                 completed_at, error FROM tasks ORDER BY created_at ASC"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let tools_json: String = row.get(6)?;
+                let deps_json: String = row.get(7)?;
+                Ok(Task {
+                    id: row.get(0)?,
+                    goal_id: row.get(1)?,
+                    description: row.get(2)?,
+                    assigned_agent: row.get(3)?,
+                    status: row.get(4)?,
+                    intelligence_level: row.get(5)?,
+                    required_tools: serde_json::from_str(&tools_json).unwrap_or_default(),
+                    depends_on: serde_json::from_str(&deps_json).unwrap_or_default(),
+                    input_json: row.get(8)?,
+                    output_json: row.get(9)?,
+                    created_at: row.get(10)?,
+                    started_at: row.get(11)?,
+                    completed_at: row.get(12)?,
+                    error: row.get(13)?,
+                })
+            })?;
+            for row in rows {
+                let task = row?;
+                goal_tasks.entry(task.goal_id.clone()).or_default().push(task);
+            }
+        }
+
+        // Load messages
+        {
+            let mut stmt = db.prepare(
+                "SELECT id, goal_id, sender, content, timestamp FROM messages ORDER BY timestamp ASC"
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(1)?, // goal_id
+                    GoalMessage {
+                        id: row.get(0)?,
+                        sender: row.get(2)?,
+                        content: row.get(3)?,
+                        timestamp: row.get(4)?,
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (goal_id, msg) = row?;
+                goal_messages.entry(goal_id).or_default().push(msg);
+            }
+        }
+
+        let goal_count = goals.len();
+        tracing::info!("GoalEngine loaded from {db_path}: {goal_count} goals restored");
+
+        Ok(Self {
+            goals,
+            goal_tasks,
+            goal_messages,
+            db: Some(Mutex::new(db)),
+        })
     }
 
     /// Submit a new goal
@@ -55,9 +218,6 @@ impl GoalEngine {
             metadata_json: vec![],
         };
 
-        self.goals.insert(id.clone(), goal.clone());
-        self.goal_tasks.insert(id.clone(), vec![]);
-
         // Initialize conversation with a system message
         let system_msg = GoalMessage {
             id: Uuid::new_v4().to_string(),
@@ -65,6 +225,27 @@ impl GoalEngine {
             content: format!("Goal submitted: {}", &goal.description),
             timestamp: now,
         };
+
+        // Persist to SQLite
+        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            db.execute(
+                "INSERT INTO goals (id, description, priority, source, status, created_at, updated_at, tags, metadata_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![
+                    goal.id, goal.description, goal.priority, goal.source,
+                    goal.status, goal.created_at, goal.updated_at,
+                    "[]", goal.metadata_json,
+                ],
+            )?;
+            db.execute(
+                "INSERT INTO messages (id, goal_id, sender, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![system_msg.id, id, system_msg.sender, system_msg.content, system_msg.timestamp],
+            )?;
+        }
+
+        // Update in-memory cache
+        self.goals.insert(id.clone(), goal.clone());
+        self.goal_tasks.insert(id.clone(), vec![]);
         self.goal_messages.insert(id.clone(), vec![system_msg]);
 
         tracing::info!("Goal submitted: {id}");
@@ -114,11 +295,25 @@ impl GoalEngine {
         goal.status = "cancelled".to_string();
         goal.updated_at = chrono::Utc::now().timestamp();
 
+        // Persist
+        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            let _ = db.execute(
+                "UPDATE goals SET status = 'cancelled', updated_at = ?1 WHERE id = ?2",
+                rusqlite::params![goal.updated_at, goal_id],
+            );
+        }
+
         // Cancel all associated tasks
         if let Some(tasks) = self.goal_tasks.get_mut(goal_id) {
             for task in tasks.iter_mut() {
                 if task.status != "completed" {
                     task.status = "cancelled".to_string();
+                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                        let _ = db.execute(
+                            "UPDATE tasks SET status = 'cancelled' WHERE id = ?1",
+                            rusqlite::params![task.id],
+                        );
+                    }
                 }
             }
         }
@@ -175,6 +370,24 @@ impl GoalEngine {
     /// Add tasks to a goal
     pub fn add_tasks(&mut self, goal_id: &str, tasks: Vec<Task>) {
         if let Some(existing) = self.goal_tasks.get_mut(goal_id) {
+            // Persist each task
+            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                for t in &tasks {
+                    let tools_json = serde_json::to_string(&t.required_tools).unwrap_or_else(|_| "[]".to_string());
+                    let deps_json = serde_json::to_string(&t.depends_on).unwrap_or_else(|_| "[]".to_string());
+                    let _ = db.execute(
+                        "INSERT OR REPLACE INTO tasks (id, goal_id, description, assigned_agent, status, \
+                         intelligence_level, required_tools, depends_on, input_json, output_json, \
+                         created_at, started_at, completed_at, error) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                        rusqlite::params![
+                            t.id, t.goal_id, t.description, t.assigned_agent, t.status,
+                            t.intelligence_level, tools_json, deps_json, t.input_json, t.output_json,
+                            t.created_at, t.started_at, t.completed_at, t.error,
+                        ],
+                    );
+                }
+            }
             existing.extend(tasks);
         }
     }
@@ -185,6 +398,13 @@ impl GoalEngine {
             for task in tasks.iter_mut() {
                 if task.id == task_id {
                     task.status = "completed".to_string();
+                    task.completed_at = chrono::Utc::now().timestamp();
+                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                        let _ = db.execute(
+                            "UPDATE tasks SET status = 'completed', completed_at = ?1 WHERE id = ?2",
+                            rusqlite::params![task.completed_at, task_id],
+                        );
+                    }
                     break;
                 }
             }
@@ -196,13 +416,25 @@ impl GoalEngine {
         if let Some(goal) = self.goals.get_mut(goal_id) {
             goal.status = status.to_string();
             goal.updated_at = chrono::Utc::now().timestamp();
+            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                let _ = db.execute(
+                    "UPDATE goals SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![status, goal.updated_at, goal_id],
+                );
+            }
         }
     }
 
     /// Set metadata on a goal (used to store preferred provider, etc.)
     pub fn set_metadata(&mut self, goal_id: &str, metadata: Vec<u8>) {
         if let Some(goal) = self.goals.get_mut(goal_id) {
-            goal.metadata_json = metadata;
+            goal.metadata_json = metadata.clone();
+            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                let _ = db.execute(
+                    "UPDATE goals SET metadata_json = ?1 WHERE id = ?2",
+                    rusqlite::params![metadata, goal_id],
+                );
+            }
         }
     }
 
@@ -220,6 +452,15 @@ impl GoalEngine {
             content: content.to_string(),
             timestamp: chrono::Utc::now().timestamp(),
         };
+
+        // Persist
+        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            let _ = db.execute(
+                "INSERT INTO messages (id, goal_id, sender, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![msg.id, goal_id, msg.sender, msg.content, msg.timestamp],
+            );
+        }
+
         self.goal_messages
             .entry(goal_id.to_string())
             .or_default()
@@ -241,6 +482,12 @@ impl GoalEngine {
             for task in tasks.iter_mut() {
                 if task.id == task_id {
                     task.status = status.to_string();
+                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                        let _ = db.execute(
+                            "UPDATE tasks SET status = ?1 WHERE id = ?2",
+                            rusqlite::params![status, task_id],
+                        );
+                    }
                     break;
                 }
             }
@@ -588,5 +835,37 @@ mod tests {
         let engine = GoalEngine::new();
         let progress = engine.calculate_progress("nonexistent").await;
         assert_eq!(progress, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test_goals.db");
+        let db_str = db_path.to_str().unwrap();
+
+        // Create engine, submit goal and message
+        let goal_id;
+        {
+            let mut engine = GoalEngine::with_db(db_str).unwrap();
+            goal_id = engine
+                .submit_goal("Persistent goal".into(), 1, "test".into())
+                .await
+                .unwrap();
+            engine.add_message(&goal_id, "user", "Hello from test");
+            engine.update_status(&goal_id, "in_progress");
+        }
+
+        // Reopen — data should still be there
+        {
+            let engine = GoalEngine::with_db(db_str).unwrap();
+            assert_eq!(engine.active_goal_count(), 1);
+            let (goal, _tasks) = engine.get_goal_with_tasks(&goal_id).await.unwrap();
+            assert_eq!(goal.description, "Persistent goal");
+            assert_eq!(goal.status, "in_progress");
+            let msgs = engine.get_messages(&goal_id);
+            assert_eq!(msgs.len(), 2); // system + user
+            assert_eq!(msgs[1].sender, "user");
+            assert_eq!(msgs[1].content, "Hello from test");
+        }
     }
 }
