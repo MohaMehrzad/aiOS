@@ -607,110 +607,208 @@ async fn execute_tool_call(
 
 /// Parse clarification request from AI response
 fn parse_clarification(response_text: &str) -> Option<String> {
-    let text = response_text.trim();
-    let json_str = if text.starts_with("```") {
-        let lines: Vec<&str> = text.lines().collect();
-        let start = if lines
-            .first()
-            .map_or(false, |l| l.starts_with("```"))
-        {
-            1
-        } else {
-            0
-        };
-        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
-            lines.len() - 1
-        } else {
-            lines.len()
-        };
-        lines[start..end].join("\n")
-    } else {
-        text.to_string()
-    };
+    let parsed = extract_json_from_text(response_text)?;
 
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-        if parsed
-            .get("needs_clarification")
-            .and_then(|v| v.as_bool())
-            == Some(true)
-        {
-            if let Some(questions) = parsed.get("questions").and_then(|v| v.as_array()) {
-                let q_text: Vec<String> = questions
-                    .iter()
-                    .filter_map(|q| q.as_str().map(String::from))
-                    .collect();
-                if !q_text.is_empty() {
-                    return Some(q_text.join("\n"));
-                }
+    if parsed.get("needs_clarification").and_then(|v| v.as_bool()) == Some(true) {
+        if let Some(questions) = parsed.get("questions").and_then(|v| v.as_array()) {
+            let q_text: Vec<String> = questions
+                .iter()
+                .enumerate()
+                .filter_map(|(i, q)| q.as_str().map(|s| format!("{}. {}", i + 1, s)))
+                .collect();
+            if !q_text.is_empty() {
+                return Some(q_text.join("\n"));
             }
-            if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
-                return Some(reasoning.to_string());
-            }
-            return Some("I need more information to proceed with this task.".to_string());
         }
+        if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+            return Some(reasoning.to_string());
+        }
+        return Some("I need more information to proceed with this task.".to_string());
     }
     None
+}
+
+/// Try to find and extract a JSON object from text that may contain prose around it.
+/// Handles: raw JSON, markdown-fenced JSON, JSON embedded in prose like "Response:\n\n```json\n{...}\n```"
+fn extract_json_from_text(text: &str) -> Option<serde_json::Value> {
+    let trimmed = text.trim();
+
+    // 1. Try direct parse
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(v);
+    }
+
+    // 2. Try extracting from markdown code fences (anywhere in text)
+    if let Some(fence_start) = trimmed.find("```") {
+        let after_fence = &trimmed[fence_start + 3..];
+        // Skip optional language tag (e.g. ```json)
+        let json_start = after_fence.find('\n').map(|i| i + 1).unwrap_or(0);
+        let content = &after_fence[json_start..];
+        if let Some(fence_end) = content.find("```") {
+            let inside = content[..fence_end].trim();
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(inside) {
+                return Some(v);
+            }
+        }
+    }
+
+    // 3. Try finding the first '{' and matching closing '}'
+    if let Some(start) = trimmed.find('{') {
+        // Walk forward to find the matching closing brace
+        let candidate = &trimmed[start..];
+        let mut depth = 0i32;
+        let mut end_pos = 0;
+        for (i, ch) in candidate.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_pos = i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if end_pos > 0 {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&candidate[..end_pos]) {
+                return Some(v);
+            }
+        }
+    }
+
+    None
+}
+
+/// Convert a JSON value into a human-readable summary.
+/// Handles our expected format (reasoning/result/questions) plus arbitrary structures.
+fn json_to_readable(parsed: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+
+    // Our expected fields
+    if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+        if !reasoning.is_empty() {
+            parts.push(reasoning.to_string());
+        }
+    }
+    if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
+        if !result.is_empty() {
+            parts.push(result.to_string());
+        }
+    }
+    if let Some(questions) = parsed.get("questions").and_then(|v| v.as_array()) {
+        let q_text: Vec<String> = questions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, q)| q.as_str().map(|s| format!("{}. {}", i + 1, s)))
+            .collect();
+        if !q_text.is_empty() {
+            parts.push(q_text.join("\n"));
+        }
+    }
+
+    // Handle "needs_clarification" responses with inline questions
+    if parsed.get("needs_clarification").and_then(|v| v.as_bool()) == Some(true) && parts.is_empty() {
+        parts.push("I need some more information before I can proceed:".to_string());
+    }
+
+    // Handle "steps" array (some models return a plan)
+    if let Some(steps) = parsed.get("steps").and_then(|v| v.as_array()) {
+        let step_text: Vec<String> = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                // Each step might be a string or an object with "task"/"description"
+                if let Some(text) = s.as_str() {
+                    Some(format!("{}. {}", i + 1, text))
+                } else {
+                    let task = s.get("task").or_else(|| s.get("description")).and_then(|v| v.as_str());
+                    task.map(|t| format!("{}. {}", i + 1, t))
+                }
+            })
+            .collect();
+        if !step_text.is_empty() {
+            parts.push(format!("Plan:\n{}", step_text.join("\n")));
+        }
+    }
+
+    // Handle "message" / "response" / "answer" / "explanation" (common model outputs)
+    for key in &["message", "response", "answer", "explanation", "summary", "output"] {
+        if let Some(val) = parsed.get(*key).and_then(|v| v.as_str()) {
+            if !val.is_empty() && !parts.iter().any(|p| p.contains(val)) {
+                parts.push(val.to_string());
+            }
+        }
+    }
+
+    // Handle "tool_calls" — summarize what the AI wants to do
+    if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+        if !tool_calls.is_empty() {
+            let tc_text: Vec<String> = tool_calls
+                .iter()
+                .filter_map(|tc| tc.get("tool").and_then(|v| v.as_str()).map(|t| format!("- {}", t)))
+                .collect();
+            if !tc_text.is_empty() {
+                parts.push(format!("Actions planned:\n{}", tc_text.join("\n")));
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return String::new();
+    }
+
+    let combined = parts.join("\n\n");
+    if combined.len() > 2000 {
+        format!("{}...", &combined[..2000])
+    } else {
+        combined
+    }
 }
 
 /// Extract readable display text from an AI response (may be JSON or plain text)
 fn extract_ai_display_text(response_text: &str) -> String {
     let text = response_text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
 
-    // Try to strip markdown code fences
-    let json_str = if text.starts_with("```") {
-        let lines: Vec<&str> = text.lines().collect();
-        let start = if lines
-            .first()
-            .map_or(false, |l| l.starts_with("```"))
-        {
-            1
-        } else {
-            0
-        };
-        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
-            lines.len() - 1
-        } else {
-            lines.len()
-        };
-        lines[start..end].join("\n")
-    } else {
-        text.to_string()
-    };
+    // Try to find and parse JSON from the response
+    if let Some(parsed) = extract_json_from_text(text) {
+        let readable = json_to_readable(&parsed);
+        if !readable.is_empty() {
+            // If there was prose before the JSON, prepend it
+            let prose_before = if let Some(brace_pos) = text.find('{') {
+                let before = text[..brace_pos].trim();
+                // Strip "Response:", "JSON Object:", markdown fences, etc.
+                let cleaned: String = before
+                    .lines()
+                    .filter(|l| {
+                        let t = l.trim().to_lowercase();
+                        !t.is_empty()
+                            && !t.starts_with("```")
+                            && !t.starts_with("response")
+                            && !t.starts_with("json")
+                            && !t.starts_with("here")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if cleaned.is_empty() { None } else { Some(cleaned) }
+            } else {
+                None
+            };
 
-    // Try to parse as JSON and extract human-readable parts
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-        let mut parts = Vec::new();
-
-        if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
-            parts.push(reasoning.to_string());
-        }
-        if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
-            if !result.is_empty() {
-                parts.push(result.to_string());
-            }
-        }
-        if let Some(questions) = parsed.get("questions").and_then(|v| v.as_array()) {
-            let q_text: Vec<String> = questions
-                .iter()
-                .filter_map(|q| q.as_str().map(String::from))
-                .collect();
-            if !q_text.is_empty() {
-                parts.push(format!("Questions:\n{}", q_text.join("\n")));
-            }
-        }
-
-        if !parts.is_empty() {
-            let combined = parts.join("\n\n");
-            if combined.len() > 1500 {
-                return format!("{}...", &combined[..1500]);
-            }
-            return combined;
+            return match prose_before {
+                Some(prose) => format!("{}\n\n{}", prose, readable),
+                None => readable,
+            };
         }
     }
 
-    // Not JSON — return raw text (truncated)
-    if text.len() > 1500 {
-        format!("{}...", &text[..1500])
+    // Not JSON or unrecognized structure — return as plain text (truncated)
+    if text.len() > 2000 {
+        format!("{}...", &text[..2000])
     } else {
         text.to_string()
     }
@@ -722,30 +820,23 @@ fn extract_ai_display_text(response_text: &str) -> String {
 fn build_completion_summary(response_text: &str, tool_results: &[serde_json::Value]) -> String {
     let mut parts = Vec::new();
 
-    // Extract reasoning and result from the AI JSON response
-    let text = response_text.trim();
-    let json_str = if text.starts_with("```") {
-        let lines: Vec<&str> = text.lines().collect();
-        let start = if lines.first().map_or(false, |l| l.starts_with("```")) { 1 } else { 0 };
-        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
-            lines.len() - 1
-        } else {
-            lines.len()
-        };
-        lines[start..end].join("\n")
-    } else {
-        text.to_string()
-    };
-
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+    // Extract readable AI reasoning from the response (handles prose-wrapped JSON, fences, etc.)
+    if let Some(parsed) = extract_json_from_text(response_text) {
         if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
             if !reasoning.is_empty() {
-                parts.push(format!("**Reasoning:** {reasoning}"));
+                parts.push(reasoning.to_string());
             }
         }
         if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
             if !result.is_empty() {
-                parts.push(format!("**Result:** {result}"));
+                parts.push(result.to_string());
+            }
+        }
+        // If our expected fields aren't present, use the generic readable extractor
+        if parts.is_empty() {
+            let readable = json_to_readable(&parsed);
+            if !readable.is_empty() {
+                parts.push(readable);
             }
         }
     }
