@@ -30,6 +30,7 @@ tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 rusqlite = { workspace = true }
 rcgen = "0.13"
+toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

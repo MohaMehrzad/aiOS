@@ -102,6 +102,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toml",
  "tonic",
  "tonic-build",
  "tower-http 0.5.2",

@@ -64,52 +64,104 @@ impl AgentSpawner {
     pub fn load_configs(&mut self) -> Result<Vec<AgentConfig>> {
         let mut configs = Vec::new();
 
-        // Default agent configurations if config dir doesn't exist
-        let default_agents = vec![
-            AgentConfig {
-                name: "system-agent".to_string(),
-                agent_type: "system".to_string(),
-                module: "aios_agent.agents.system_agent".to_string(),
-                capabilities: vec!["system_management".to_string()],
-                tool_namespaces: vec!["fs".to_string(), "process".to_string(), "service".to_string()],
-                max_restarts: 5,
-                restart_delay: Duration::from_secs(5),
-            },
-            AgentConfig {
-                name: "network-agent".to_string(),
-                agent_type: "network".to_string(),
-                module: "aios_agent.agents.network_agent".to_string(),
-                capabilities: vec!["network_management".to_string()],
-                tool_namespaces: vec!["net".to_string(), "firewall".to_string()],
-                max_restarts: 5,
-                restart_delay: Duration::from_secs(5),
-            },
-            AgentConfig {
-                name: "security-agent".to_string(),
-                agent_type: "security".to_string(),
-                module: "aios_agent.agents.security_agent".to_string(),
-                capabilities: vec!["security_management".to_string()],
-                tool_namespaces: vec!["sec".to_string()],
-                max_restarts: 5,
-                restart_delay: Duration::from_secs(5),
-            },
-        ];
-
         if self.config_dir.exists() {
-            // Try to read TOML configs from the directory
             if let Ok(entries) = std::fs::read_dir(&self.config_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().map_or(false, |e| e == "toml") {
-                        info!("Found agent config: {}", path.display());
-                        // In production, parse the TOML file here
+                        match std::fs::read_to_string(&path) {
+                            Ok(contents) => {
+                                match contents.parse::<toml::Table>() {
+                                    Ok(table) => {
+                                        let agent = table.get("agent");
+                                        let agent_type = agent
+                                            .and_then(|a| a.get("type"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("task");
+                                        let name = agent
+                                            .and_then(|a| a.get("name"))
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("unknown");
+                                        // Module name matches the Python file name (same as agent type)
+                                        let module = format!("aios_agent.agents.{}", agent_type);
+                                        let caps = table
+                                            .get("capabilities")
+                                            .and_then(|c| c.get("tools"))
+                                            .and_then(|t| t.as_array())
+                                            .map(|arr| {
+                                                arr.iter()
+                                                    .filter_map(|v| v.as_str())
+                                                    .map(|s| {
+                                                        s.split('.').next().unwrap_or(s).to_string()
+                                                    })
+                                                    .collect::<std::collections::HashSet<_>>()
+                                                    .into_iter()
+                                                    .collect::<Vec<_>>()
+                                            })
+                                            .unwrap_or_default();
+
+                                        let agent_name = format!("{}-agent", agent_type);
+                                        info!(
+                                            "Loaded agent config: {} (type: {}, module: {})",
+                                            agent_name, agent_type, module
+                                        );
+
+                                        configs.push(AgentConfig {
+                                            name: agent_name,
+                                            agent_type: agent_type.to_string(),
+                                            module,
+                                            capabilities: vec![format!("{}_management", agent_type)],
+                                            tool_namespaces: caps,
+                                            max_restarts: 5,
+                                            restart_delay: Duration::from_secs(5),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to parse agent config {}: {e}", path.display());
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to read agent config {}: {e}", path.display());
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // Use defaults for now
-        configs.extend(default_agents);
+        // Fall back to defaults if no configs found
+        if configs.is_empty() {
+            configs.extend(vec![
+                AgentConfig {
+                    name: "system-agent".to_string(),
+                    agent_type: "system".to_string(),
+                    module: "aios_agent.agents.system".to_string(),
+                    capabilities: vec!["system_management".to_string()],
+                    tool_namespaces: vec!["fs".to_string(), "process".to_string(), "service".to_string()],
+                    max_restarts: 5,
+                    restart_delay: Duration::from_secs(5),
+                },
+                AgentConfig {
+                    name: "network-agent".to_string(),
+                    agent_type: "network".to_string(),
+                    module: "aios_agent.agents.network".to_string(),
+                    capabilities: vec!["network_management".to_string()],
+                    tool_namespaces: vec!["net".to_string(), "firewall".to_string()],
+                    max_restarts: 5,
+                    restart_delay: Duration::from_secs(5),
+                },
+                AgentConfig {
+                    name: "security-agent".to_string(),
+                    agent_type: "security".to_string(),
+                    module: "aios_agent.agents.security".to_string(),
+                    capabilities: vec!["security_management".to_string()],
+                    tool_namespaces: vec!["sec".to_string()],
+                    max_restarts: 5,
+                    restart_delay: Duration::from_secs(5),
+                },
+            ]);
+        }
         Ok(configs)
     }
 
