@@ -891,12 +891,25 @@ fn extract_json_from_text(text: &str) -> Option<serde_json::Value> {
 fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallRequest> {
     let mut calls = Vec::new();
 
+    // First, look for tool parameters that might be at the top level or under known keys.
+    // Some models put parameters in "parameters", "inputs", "arguments", or "input" at root level.
+    let extra_params = find_tool_parameters(parsed);
+
     // Try "steps" array — each step might reference a tool
     if let Some(steps) = parsed.get("steps").and_then(|v| v.as_array()) {
         for step in steps {
-            // Step might be {"tool": "monitor.cpu", ...} or {"task": "Call monitor.cpu", ...}
-            if let Some(tool) = step.get("tool").and_then(|v| v.as_str()) {
-                let input = step.get("input").cloned().unwrap_or(serde_json::json!({}));
+            // Step might be {"tool": "monitor.cpu", ...} or {"action": "email.send", "parameters": {...}}
+            let tool_name = step.get("tool").and_then(|v| v.as_str())
+                .or_else(|| step.get("action").and_then(|v| v.as_str()))
+                .or_else(|| step.get("name").and_then(|v| v.as_str()));
+            if let Some(tool) = tool_name {
+                let input = step.get("input")
+                    .or_else(|| step.get("parameters"))
+                    .or_else(|| step.get("params"))
+                    .or_else(|| step.get("arguments"))
+                    .or_else(|| step.get("args"))
+                    .cloned()
+                    .unwrap_or(serde_json::json!({}));
                 if let Ok(bytes) = serde_json::to_vec(&input) {
                     calls.push(ToolCallRequest {
                         tool_name: tool.to_string(),
@@ -908,7 +921,6 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
                 let text = step.as_str()
                     .or_else(|| step.get("task").and_then(|v| v.as_str()))
                     .or_else(|| step.get("description").and_then(|v| v.as_str()))
-                    .or_else(|| step.get("action").and_then(|v| v.as_str()))
                     .unwrap_or("");
                 calls.extend(extract_tools_from_natural_language(text));
             }
@@ -919,11 +931,31 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
     if calls.is_empty() {
         if let Some(tools) = parsed.get("tools_needed").and_then(|v| v.as_array()) {
             for tool in tools {
-                if let Some(name) = tool.as_str() {
-                    calls.push(ToolCallRequest {
-                        tool_name: name.to_string(),
-                        input_json: b"{}".to_vec(),
-                    });
+                // Tool might be a string name or an object with name + params
+                if let Some(obj) = tool.as_object() {
+                    let name = obj.get("tool").or_else(|| obj.get("name"))
+                        .and_then(|v| v.as_str()).unwrap_or("");
+                    let input = obj.get("input").or_else(|| obj.get("parameters"))
+                        .cloned().unwrap_or(serde_json::json!({}));
+                    if !name.is_empty() {
+                        if let Ok(bytes) = serde_json::to_vec(&input) {
+                            calls.push(ToolCallRequest {
+                                tool_name: name.to_string(),
+                                input_json: bytes,
+                            });
+                        }
+                    }
+                } else if let Some(name) = tool.as_str() {
+                    // Use extra_params if available for this tool
+                    let input = extra_params.get(name)
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
+                    if let Ok(bytes) = serde_json::to_vec(&input) {
+                        calls.push(ToolCallRequest {
+                            tool_name: name.to_string(),
+                            input_json: bytes,
+                        });
+                    }
                 }
             }
         }
@@ -933,8 +965,14 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
     if calls.is_empty() {
         if let Some(actions) = parsed.get("actions").and_then(|v| v.as_array()) {
             for action in actions {
-                if let Some(tool) = action.get("tool").and_then(|v| v.as_str()) {
-                    let input = action.get("input").cloned().unwrap_or(serde_json::json!({}));
+                let tool_name = action.get("tool").and_then(|v| v.as_str())
+                    .or_else(|| action.get("name").and_then(|v| v.as_str()));
+                if let Some(tool) = tool_name {
+                    let input = action.get("input")
+                        .or_else(|| action.get("parameters"))
+                        .or_else(|| action.get("params"))
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
                     if let Ok(bytes) = serde_json::to_vec(&input) {
                         calls.push(ToolCallRequest {
                             tool_name: tool.to_string(),
@@ -946,7 +984,85 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
         }
     }
 
+    // Post-process: if any calls have empty {} input, try to enrich from extra_params
+    for call in &mut calls {
+        if call.input_json == b"{}" {
+            if let Some(params) = extra_params.get(&call.tool_name) {
+                if let Ok(bytes) = serde_json::to_vec(params) {
+                    tracing::info!(
+                        "Enriched tool call {} with parameters from response JSON",
+                        call.tool_name
+                    );
+                    call.input_json = bytes;
+                }
+            }
+        }
+    }
+
     calls
+}
+
+/// Scan the parsed JSON for tool parameters that might be stored under various keys.
+/// Returns a map of tool_name -> parameters found.
+fn find_tool_parameters(parsed: &serde_json::Value) -> std::collections::HashMap<String, serde_json::Value> {
+    let mut params = std::collections::HashMap::new();
+
+    let obj = match parsed.as_object() {
+        Some(o) => o,
+        None => return params,
+    };
+
+    // Look for "parameters", "inputs", "arguments", "input" at root level
+    for key in &["parameters", "inputs", "arguments", "input", "params", "tool_input"] {
+        if let Some(val) = obj.get(*key) {
+            if let Some(inner_obj) = val.as_object() {
+                // If this contains a "tool" key, it's tool-specific: {"tool": "email.send", "to": "..."}
+                if let Some(tool_name) = inner_obj.get("tool").and_then(|v| v.as_str()) {
+                    let mut clean = val.clone();
+                    if let Some(m) = clean.as_object_mut() {
+                        m.remove("tool");
+                    }
+                    params.insert(tool_name.to_string(), clean);
+                } else {
+                    // Generic parameters — associate with any tool that needs them
+                    // Store under a wildcard key "*"
+                    params.insert("*".to_string(), val.clone());
+                }
+            }
+        }
+    }
+
+    // Look for "tool_calls" that might be structured differently
+    if let Some(tc) = obj.get("tool_calls").and_then(|v| v.as_array()) {
+        for item in tc {
+            if let Some(item_obj) = item.as_object() {
+                let name = item_obj.get("tool")
+                    .or_else(|| item_obj.get("name"))
+                    .or_else(|| item_obj.get("function"))
+                    .and_then(|v| v.as_str());
+                let input = item_obj.get("input")
+                    .or_else(|| item_obj.get("parameters"))
+                    .or_else(|| item_obj.get("params"))
+                    .or_else(|| item_obj.get("arguments"));
+                if let (Some(n), Some(i)) = (name, input) {
+                    params.insert(n.to_string(), i.clone());
+                }
+            }
+        }
+    }
+
+    // If wildcard params found and we have tools_needed, associate with those tools
+    if let Some(wildcard) = params.remove("*") {
+        if let Some(tools) = obj.get("tools_needed").and_then(|v| v.as_array()) {
+            for tool in tools {
+                if let Some(name) = tool.as_str() {
+                    params.entry(name.to_string()).or_insert_with(|| wildcard.clone());
+                }
+            }
+        }
+    }
+
+    params
 }
 
 /// Extract tool names from natural language text.

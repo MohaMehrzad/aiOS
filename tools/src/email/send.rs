@@ -60,7 +60,9 @@ struct Output {
 const SMTP_CONFIG_PATH: &str = "/var/lib/aios/config/smtp.json";
 
 pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
-    let input: Input = serde_json::from_slice(input).context("Invalid JSON input")?;
+    let input: Input = serde_json::from_slice(input).context(
+        "Invalid JSON input for email.send. Required: {\"to\": \"recipient@email.com\", \"subject\": \"...\", \"body\": \"...\"}"
+    )?;
 
     // Load SMTP config
     let config_data =
