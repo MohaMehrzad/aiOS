@@ -71,6 +71,60 @@ impl CapabilityChecker {
 
         self.register_agent("autonomy-loop", &all_capabilities);
         info!("Registered autonomy-loop agent with {} capabilities", all_capabilities.len());
+
+        // Register Python agents with their required capabilities
+        let system_caps: Vec<String> = vec![
+            "monitor_read", "service_read", "service_manage", "process_read",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("system-agent", &system_caps);
+
+        let network_caps: Vec<String> = vec![
+            "net_read", "net_write", "net_scan", "firewall_read", "firewall_manage",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("network-agent", &network_caps);
+
+        let security_caps: Vec<String> = vec![
+            "sec_read", "sec_manage", "net_read", "net_scan",
+            "process_read", "monitor_read", "fs_read",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("security-agent", &security_caps);
+
+        let monitoring_caps: Vec<String> = vec![
+            "monitor_read", "net_read", "process_read", "fs_read",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("monitoring-agent", &monitoring_caps);
+
+        let storage_caps: Vec<String> = vec![
+            "fs_read", "fs_write", "fs_delete", "fs_permissions",
+            "monitor_read", "process_manage",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("storage-agent", &storage_caps);
+
+        let package_caps: Vec<String> = vec![
+            "pkg_read", "pkg_manage",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("package-agent", &package_caps);
+
+        let learning_caps: Vec<String> = vec![
+            "monitor_read", "process_read", "fs_read",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("learning-agent", &learning_caps);
+
+        let task_caps: Vec<String> = all_capabilities.clone();
+        self.register_agent("task-agent", &task_caps);
+
+        let creator_caps: Vec<String> = vec![
+            "fs_read", "fs_write", "code_gen", "git_read", "git_write",
+            "process_manage", "plugin_read", "plugin_manage", "plugin_execute",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("creator-agent", &creator_caps);
+
+        let web_caps: Vec<String> = vec![
+            "net_read", "net_write", "fs_read", "fs_write",
+        ].into_iter().map(String::from).collect();
+        self.register_agent("web-agent", &web_caps);
+
+        info!("Registered 10 default agents with capabilities");
     }
 
     /// Register default tool capability requirements
