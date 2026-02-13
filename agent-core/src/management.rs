@@ -537,18 +537,96 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
-/// Handle a WebSocket connection — push status updates every 2 seconds
+/// Handle a WebSocket connection — push full state every 2 seconds, accept subscription commands
 async fn handle_ws(mut socket: WebSocket, state: MgmtState) {
     info!("WebSocket client connected");
 
+    // Track which goal the client is watching
+    let mut subscribed_goal: Option<String> = None;
+
     loop {
-        // Gather current status
+        // Gather current status + goals + subscribed goal chat
         let update = {
             let s = state.orchestrator.read().await;
             let health = state.health_checker.read().await;
             let health_status = health.get_all_status();
 
-            serde_json::json!({
+            // Build goals list
+            let (goals, _) = s.goal_engine.list_goals("", 50, 0).await;
+            let goals_json: Vec<serde_json::Value> = goals
+                .iter()
+                .map(|g| {
+                    serde_json::json!({
+                        "id": g.id,
+                        "description": g.description,
+                        "status": g.status,
+                        "priority": g.priority,
+                        "created_at": g.created_at,
+                    })
+                })
+                .collect();
+
+            // Build agents list
+            let agents = s.agent_router.list_agents().await;
+            let agents_json: Vec<serde_json::Value> = agents
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "agent_id": a.agent_id,
+                        "agent_type": a.agent_type,
+                        "status": a.status,
+                        "capabilities": a.capabilities,
+                    })
+                })
+                .collect();
+
+            // Build goal chat if subscribed
+            let goal_chat = if let Some(ref gid) = subscribed_goal {
+                let messages = s.goal_engine.get_messages(gid);
+                let messages_json: Vec<serde_json::Value> = messages
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "id": m.id,
+                            "sender": m.sender,
+                            "content": m.content,
+                            "timestamp": m.timestamp,
+                        })
+                    })
+                    .collect();
+
+                let tasks_json = match s.goal_engine.get_goal_with_tasks(gid).await {
+                    Ok((_goal, tasks)) => tasks
+                        .iter()
+                        .map(|t| {
+                            let output_text = String::from_utf8_lossy(&t.output_json).to_string();
+                            let display_output = extract_ai_response(&output_text);
+                            serde_json::json!({
+                                "task_id": t.id,
+                                "description": t.description,
+                                "status": t.status,
+                                "intelligence_level": t.intelligence_level,
+                                "output": display_output,
+                                "model_used": extract_json_field(&output_text, "model_used"),
+                                "error": t.error,
+                                "created_at": t.created_at,
+                                "completed_at": t.completed_at,
+                            })
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                };
+
+                Some(serde_json::json!({
+                    "goal_id": gid,
+                    "messages": messages_json,
+                    "tasks": tasks_json,
+                }))
+            } else {
+                None
+            };
+
+            let mut update = serde_json::json!({
                 "type": "status_update",
                 "active_goals": s.goal_engine.active_goal_count(),
                 "pending_tasks": s.task_planner.pending_task_count(),
@@ -561,7 +639,15 @@ async fn handle_ws(mut socket: WebSocket, state: MgmtState) {
                         "latency_ms": h.last_check_ms,
                     })
                 }).collect::<Vec<_>>(),
-            })
+                "goals": goals_json,
+                "agents": agents_json,
+            });
+
+            if let Some(chat) = goal_chat {
+                update.as_object_mut().unwrap().insert("goal_chat".to_string(), chat);
+            }
+
+            update
         };
 
         if socket
@@ -572,16 +658,32 @@ async fn handle_ws(mut socket: WebSocket, state: MgmtState) {
             break;
         }
 
-        // Check for client messages (ping/close)
+        // Check for client messages (subscribe, ping, close) with 2s timeout
         match tokio::time::timeout(
             std::time::Duration::from_secs(2),
             socket.recv(),
         )
         .await
         {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                // Handle subscription commands from the client
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
+                    match msg.get("type").and_then(|v| v.as_str()) {
+                        Some("subscribe_goal") => {
+                            if let Some(gid) = msg.get("goal_id").and_then(|v| v.as_str()) {
+                                subscribed_goal = Some(gid.to_string());
+                            }
+                        }
+                        Some("unsubscribe_goal") => {
+                            subscribed_goal = None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
             Ok(Some(Err(_))) => break,
-            _ => {} // Timeout or other message — continue
+            _ => {} // Timeout — continue pushing
         }
     }
 
@@ -802,18 +904,27 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
             event.target.classList.add('active');
         }
 
-        // --- WebSocket ---
+        // --- State ---
         let ws;
+        let currentGoalId = null;
+        let lastGoalChatCount = 0; // Track item count to avoid unnecessary DOM updates
+
+        // --- WebSocket (single source of truth for ALL data) ---
         function connectWS() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${proto}//${location.host}/ws`);
             ws.onopen = () => {
                 document.getElementById('ws-status').textContent = 'live';
                 document.getElementById('ws-status').className = 'ws-status ws-connected';
+                // Re-subscribe if we had a goal selected
+                if (currentGoalId) {
+                    ws.send(JSON.stringify({ type: 'subscribe_goal', goal_id: currentGoalId }));
+                }
             };
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 if (data.type === 'status_update') {
+                    // Update counters
                     document.getElementById('goals').textContent = data.active_goals;
                     document.getElementById('tasks').textContent = data.pending_tasks;
                     document.getElementById('agents').textContent = data.active_agents;
@@ -821,10 +932,27 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                     const mins = Math.floor(data.uptime_seconds / 60);
                     const hrs = Math.floor(mins / 60);
                     document.getElementById('uptime').textContent = hrs > 0 ? `${hrs}h ${mins%60}m` : `${mins}m`;
+
+                    // Update health table
                     if (data.services) {
                         document.getElementById('health-table').innerHTML = data.services.map(s =>
                             `<tr><td>${s.name}</td><td class="${s.healthy ? 'svc-healthy' : 'svc-unhealthy'}">${s.healthy ? 'healthy' : 'unhealthy'}</td><td>${s.latency_ms}ms</td></tr>`
                         ).join('');
+                    }
+
+                    // Update goals table
+                    if (data.goals) {
+                        updateGoalsTable(data.goals);
+                    }
+
+                    // Update agents table
+                    if (data.agents) {
+                        updateAgentsTable(data.agents);
+                    }
+
+                    // Update goal chat (only if content changed)
+                    if (data.goal_chat && data.goal_chat.goal_id === currentGoalId) {
+                        renderGoalChat(data.goal_chat);
                     }
                 }
             };
@@ -835,6 +963,77 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
             };
         }
         connectWS();
+
+        // --- Render goals table from WS data ---
+        function updateGoalsTable(goals) {
+            document.getElementById('goals-table').innerHTML = goals.map(g =>
+                `<tr class="goal-row${currentGoalId === g.id ? ' style="background:#1e293b"' : ''}" onclick="selectGoal('${g.id}')"><td>${g.id.slice(0,8)}</td><td>${escapeHtml(g.description.slice(0,80))}${g.description.length>80?'...':''}</td><td class="status-${g.status}">${g.status}</td><td>${g.priority}</td></tr>`
+            ).join('');
+        }
+
+        // --- Render agents table from WS data ---
+        function updateAgentsTable(agents) {
+            document.getElementById('agents-table').innerHTML = agents.map(a =>
+                `<tr><td>${a.agent_id.slice(0,8)}</td><td>${a.agent_type}</td><td>${a.status}</td><td>${(a.capabilities || []).slice(0,3).join(', ')}${(a.capabilities || []).length>3?'...':''}</td></tr>`
+            ).join('') || '<tr><td colspan="4" style="color:#6b7280">No agents registered</td></tr>';
+        }
+
+        // --- Render goal chat from WS-pushed data (no fetch!) ---
+        function renderGoalChat(chatData) {
+            const messages = chatData.messages || [];
+            const tasks = chatData.tasks || [];
+            const totalItems = messages.length + tasks.length;
+
+            // Skip DOM update if item count unchanged (avoids flicker)
+            if (totalItems === lastGoalChatCount) return;
+            lastGoalChatCount = totalItems;
+
+            let items = [];
+            for (const m of messages) { items.push({ type: 'message', ...m }); }
+            for (const t of tasks) { items.push({ type: 'task', ...t, timestamp: t.completed_at || t.created_at }); }
+            items.sort((a, b) => a.timestamp - b.timestamp);
+
+            const area = document.getElementById('goal-chat-area');
+            let html = '';
+            for (const item of items) {
+                if (item.type === 'message') {
+                    if (item.sender === 'system') {
+                        html += `<div style="color:#6b7280;font-size:0.8em;padding:4px 8px;margin:4px 0">${escapeHtml(item.content)}</div>`;
+                    } else if (item.sender === 'ai') {
+                        html += `<div class="msg msg-ai" style="margin:6px 0"><div class="msg-label">AI</div><div class="msg-content">${formatResponse(item.content)}</div></div>`;
+                    } else {
+                        html += `<div class="msg msg-user" style="margin:6px 0"><div class="msg-label">You</div><div class="msg-content">${escapeHtml(item.content)}</div></div>`;
+                    }
+                } else {
+                    const sc = item.status === 'completed' ? '#00ff88' : item.status === 'failed' ? '#ff4444' : item.status === 'awaiting_input' ? '#ffa500' : item.status === 'in_progress' ? '#00d4ff' : '#6b7280';
+                    const badge = `<span style="background:${sc}22;color:${sc};padding:2px 8px;border-radius:10px;font-size:0.8em">${item.status}</span>`;
+                    html += `<div style="border:1px solid #1e3a5f;border-radius:6px;padding:10px;margin:8px 0">`;
+                    html += `<div style="display:flex;justify-content:space-between;align-items:center"><span style="color:#00d4ff;font-weight:bold;font-size:0.9em">${escapeHtml(item.description.slice(0,60))}</span>${badge}</div>`;
+                    if (item.output) {
+                        html += `<div style="margin-top:6px;font-size:0.85em;color:#c0c0c0;white-space:pre-wrap;max-height:200px;overflow-y:auto">${formatResponse(item.output)}</div>`;
+                    }
+                    if (item.error) {
+                        html += `<div style="color:#ff4444;font-size:0.85em;margin-top:4px">Error: ${escapeHtml(item.error)}</div>`;
+                    }
+                    html += `</div>`;
+                }
+            }
+            area.innerHTML = html || '<div style="color:#6b7280;text-align:center;padding:20px">No activity yet...</div>';
+            area.scrollTop = area.scrollHeight;
+
+            const hasAwaiting = tasks.some(t => t.status === 'awaiting_input');
+            document.getElementById('goal-reply-area').style.display = hasAwaiting ? 'block' : 'none';
+        }
+
+        // --- Select a goal (subscribe via WS) ---
+        function selectGoal(goalId) {
+            currentGoalId = goalId;
+            lastGoalChatCount = -1; // Force re-render on next push
+            document.getElementById('goal-chat-area').innerHTML = '<div style="color:#6b7280;text-align:center;padding:20px"><span class="spinner"></span> Loading...</div>';
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'subscribe_goal', goal_id: goalId }));
+            }
+        }
 
         // --- Chat ---
         async function sendChat() {
@@ -881,88 +1080,14 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
         }
 
         function formatResponse(text) {
-            // Basic markdown-ish formatting
             let html = escapeHtml(text);
-            // Bold
             html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            // Code blocks
             html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:#0a0e1a;padding:8px;border-radius:4px;overflow-x:auto">$2</pre>');
-            // Inline code
             html = html.replace(/`([^`]+)`/g, '<code style="background:#0a0e1a;padding:2px 6px;border-radius:3px">$1</code>');
             return html;
         }
 
-        // --- Goals ---
-        let currentGoalId = null;
-        let goalRefreshInterval = null;
-
-        async function refresh() {
-            try {
-                const goals = await (await fetch('/api/goals')).json();
-                document.getElementById('goals-table').innerHTML = goals.map(g =>
-                    `<tr class="goal-row" onclick="loadGoalChat('${g.id}')"><td>${g.id.slice(0,8)}</td><td>${escapeHtml(g.description.slice(0,80))}${g.description.length>80?'...':''}</td><td class="status-${g.status}">${g.status}</td><td>${g.priority}</td></tr>`
-                ).join('');
-
-                const agents = await (await fetch('/api/agents')).json();
-                document.getElementById('agents-table').innerHTML = agents.map(a =>
-                    `<tr><td>${a.agent_id.slice(0,8)}</td><td>${a.agent_type}</td><td>${a.status}</td><td>${a.capabilities.slice(0,3).join(', ')}${a.capabilities.length>3?'...':''}</td></tr>`
-                ).join('') || '<tr><td colspan="4" style="color:#6b7280">No agents registered</td></tr>';
-            } catch(e) { console.error('Refresh failed:', e); }
-        }
-
-        async function loadGoalChat(goalId) {
-            currentGoalId = goalId;
-            const area = document.getElementById('goal-chat-area');
-            area.innerHTML = '<div style="color:#6b7280;text-align:center;padding:20px"><span class="spinner"></span> Loading...</div>';
-            try {
-                const [messages, tasks] = await Promise.all([
-                    fetch(`/api/goals/${goalId}/messages`).then(r => r.json()),
-                    fetch(`/api/goals/${goalId}/tasks`).then(r => r.json()),
-                ]);
-                let items = [];
-                for (const m of messages) { items.push({ type: 'message', ...m }); }
-                for (const t of tasks) { items.push({ type: 'task', ...t, timestamp: t.completed_at || t.created_at }); }
-                items.sort((a, b) => a.timestamp - b.timestamp);
-
-                let html = '';
-                for (const item of items) {
-                    if (item.type === 'message') {
-                        if (item.sender === 'system') {
-                            html += `<div style="color:#6b7280;font-size:0.8em;padding:4px 8px;margin:4px 0">${escapeHtml(item.content)}</div>`;
-                        } else if (item.sender === 'ai') {
-                            html += `<div class="msg msg-ai" style="margin:6px 0"><div class="msg-label">AI</div><div class="msg-content">${formatResponse(item.content)}</div></div>`;
-                        } else {
-                            html += `<div class="msg msg-user" style="margin:6px 0"><div class="msg-label">You</div><div class="msg-content">${escapeHtml(item.content)}</div></div>`;
-                        }
-                    } else {
-                        const sc = item.status === 'completed' ? '#00ff88' : item.status === 'failed' ? '#ff4444' : item.status === 'awaiting_input' ? '#ffa500' : item.status === 'in_progress' ? '#00d4ff' : '#6b7280';
-                        const badge = `<span style="background:${sc}22;color:${sc};padding:2px 8px;border-radius:10px;font-size:0.8em">${item.status}</span>`;
-                        html += `<div style="border:1px solid #1e3a5f;border-radius:6px;padding:10px;margin:8px 0">`;
-                        html += `<div style="display:flex;justify-content:space-between;align-items:center"><span style="color:#00d4ff;font-weight:bold;font-size:0.9em">${escapeHtml(item.description.slice(0,60))}</span>${badge}</div>`;
-                        if (item.output) {
-                            html += `<div style="margin-top:6px;font-size:0.85em;color:#c0c0c0;white-space:pre-wrap;max-height:200px;overflow-y:auto">${formatResponse(item.output)}</div>`;
-                        }
-                        if (item.error) {
-                            html += `<div style="color:#ff4444;font-size:0.85em;margin-top:4px">Error: ${escapeHtml(item.error)}</div>`;
-                        }
-                        html += `</div>`;
-                    }
-                }
-                area.innerHTML = html || '<div style="color:#6b7280;text-align:center;padding:20px">No activity yet...</div>';
-                area.scrollTop = area.scrollHeight;
-
-                const hasAwaiting = tasks.some(t => t.status === 'awaiting_input');
-                document.getElementById('goal-reply-area').style.display = hasAwaiting ? 'block' : 'none';
-            } catch(e) {
-                area.innerHTML = `<div style="color:#ff4444;padding:20px">Failed to load: ${e}</div>`;
-            }
-
-            if (goalRefreshInterval) clearInterval(goalRefreshInterval);
-            goalRefreshInterval = setInterval(() => {
-                if (currentGoalId) loadGoalChat(currentGoalId);
-            }, 2000);
-        }
-
+        // --- Goal reply (POST then WS will push update) ---
         async function sendGoalMessage() {
             if (!currentGoalId) return;
             const input = document.getElementById('goal-reply-input');
@@ -975,10 +1100,12 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ content: msg })
                 });
-                loadGoalChat(currentGoalId);
+                // No need to fetch — WS will push the update
+                lastGoalChatCount = -1; // Force re-render on next push
             } catch(e) { console.error('Failed to send message:', e); }
         }
 
+        // --- Submit goal (POST then WS will push the new goal) ---
         async function submitGoal() {
             const desc = document.getElementById('goal-input').value;
             if (!desc) return;
@@ -995,15 +1122,14 @@ const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
                 const data = await res.json();
                 document.getElementById('goal-result').textContent = `Created: ${data.goal_id.slice(0,8)}`;
                 document.getElementById('goal-input').value = '';
-                refresh();
-                loadGoalChat(data.goal_id);
+                // Select the new goal — WS will push goals table + chat
+                selectGoal(data.goal_id);
             } catch(e) { document.getElementById('goal-result').textContent = `Error: ${e}`; }
             btn.disabled = false;
             btn.textContent = 'Submit Goal';
         }
 
-        refresh();
-        setInterval(refresh, 5000);
+        // No polling! Everything arrives via WebSocket.
     </script>
 </body>
 </html>"##;

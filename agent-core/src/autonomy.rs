@@ -716,6 +716,76 @@ fn extract_ai_display_text(response_text: &str) -> String {
     }
 }
 
+/// Build a human-readable summary from the AI response and tool execution results.
+/// This gets posted as an "ai" message so users can see what the AI reasoned and
+/// what tool outputs were produced, instead of just "Task completed".
+fn build_completion_summary(response_text: &str, tool_results: &[serde_json::Value]) -> String {
+    let mut parts = Vec::new();
+
+    // Extract reasoning and result from the AI JSON response
+    let text = response_text.trim();
+    let json_str = if text.starts_with("```") {
+        let lines: Vec<&str> = text.lines().collect();
+        let start = if lines.first().map_or(false, |l| l.starts_with("```")) { 1 } else { 0 };
+        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
+            lines.len() - 1
+        } else {
+            lines.len()
+        };
+        lines[start..end].join("\n")
+    } else {
+        text.to_string()
+    };
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
+        if let Some(reasoning) = parsed.get("reasoning").and_then(|v| v.as_str()) {
+            if !reasoning.is_empty() {
+                parts.push(format!("**Reasoning:** {reasoning}"));
+            }
+        }
+        if let Some(result) = parsed.get("result").and_then(|v| v.as_str()) {
+            if !result.is_empty() {
+                parts.push(format!("**Result:** {result}"));
+            }
+        }
+    }
+
+    // Summarize tool execution results
+    for tr in tool_results {
+        let tool_name = tr.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let success = tr.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        if success {
+            // Extract a meaningful snippet from the tool output
+            let output_summary = if let Some(output) = tr.get("output") {
+                let s = match output {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                };
+                if s.len() > 500 {
+                    format!("{}...", &s[..500])
+                } else {
+                    s
+                }
+            } else {
+                "OK".to_string()
+            };
+            parts.push(format!("**Tool `{tool_name}`:** {output_summary}"));
+        } else {
+            let err = tr.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            parts.push(format!("**Tool `{tool_name}` failed:** {err}"));
+        }
+    }
+
+    let combined = parts.join("\n\n");
+    // Cap total length
+    if combined.len() > 3000 {
+        format!("{}...", &combined[..3000])
+    } else {
+        combined
+    }
+}
+
 /// Handle the result of an AI inference call — execute tool calls and record results
 async fn handle_ai_result(
     state: &mut OrchestratorState,
@@ -763,89 +833,92 @@ async fn handle_ai_result(
         return;
     }
 
-    // Execute tool calls via the tools gRPC service
-    let output = {
-        // Execute each tool call via the tools gRPC service
-        let mut tool_results = Vec::new();
-        let mut all_succeeded = true;
+    // Execute each tool call via the tools gRPC service
+    let mut tool_results: Vec<serde_json::Value> = Vec::new();
+    let mut all_succeeded = true;
 
-        for tc in &result.tool_calls {
-            info!(
-                "Executing tool '{}' for task {task_id}",
-                tc.tool_name
-            );
-            match execute_tool_call(&state.clients, task_id, &tc.tool_name, &tc.input_json).await {
-                Ok(tool_result) => {
-                    info!("Tool '{}' succeeded for task {task_id}", tc.tool_name);
-                    tool_results.push(tool_result);
-                }
-                Err(e) => {
-                    warn!("Tool '{}' failed for task {task_id}: {e}", tc.tool_name);
-                    all_succeeded = false;
-                    tool_results.push(serde_json::json!({
-                        "tool": tc.tool_name,
-                        "success": false,
-                        "error": e.to_string(),
-                    }));
-                }
+    for tc in &result.tool_calls {
+        info!(
+            "Executing tool '{}' for task {task_id}",
+            tc.tool_name
+        );
+        match execute_tool_call(&state.clients, task_id, &tc.tool_name, &tc.input_json).await {
+            Ok(tool_result) => {
+                info!("Tool '{}' succeeded for task {task_id}", tc.tool_name);
+                tool_results.push(tool_result);
+            }
+            Err(e) => {
+                warn!("Tool '{}' failed for task {task_id}: {e}", tc.tool_name);
+                all_succeeded = false;
+                tool_results.push(serde_json::json!({
+                    "tool": tc.tool_name,
+                    "success": false,
+                    "error": e.to_string(),
+                }));
             }
         }
+    }
 
-        if !all_succeeded {
-            let error_msg = tool_results
-                .iter()
-                .filter(|r| r.get("success").and_then(|v| v.as_bool()) == Some(false))
-                .filter_map(|r| r.get("error").and_then(|v| v.as_str()))
-                .collect::<Vec<_>>()
-                .join("; ");
+    if !all_succeeded {
+        let error_msg = tool_results
+            .iter()
+            .filter(|r| r.get("success").and_then(|v| v.as_bool()) == Some(false))
+            .filter_map(|r| r.get("error").and_then(|v| v.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
 
-            state.task_planner.fail_task(task_id, &error_msg);
-            state
-                .goal_engine
-                .update_task_status(goal_id, task_id, "failed");
-            state.goal_engine.add_message(
-                goal_id,
-                "system",
-                &format!("Task failed: {error_msg}"),
-            );
+        state.task_planner.fail_task(task_id, &error_msg);
+        state
+            .goal_engine
+            .update_task_status(goal_id, task_id, "failed");
+        state.goal_engine.add_message(
+            goal_id,
+            "system",
+            &format!("Task failed: {error_msg}"),
+        );
 
-            state.result_aggregator.record_result(
-                goal_id,
-                crate::proto::common::TaskResult {
-                    task_id: task_id.to_string(),
-                    success: false,
-                    output_json: serde_json::to_vec(&tool_results).unwrap_or_default(),
-                    error: error_msg,
-                    duration_ms: 0,
-                    tokens_used: result.tokens_used,
-                    model_used: result.model_used.clone(),
-                },
-            );
+        state.result_aggregator.record_result(
+            goal_id,
+            crate::proto::common::TaskResult {
+                task_id: task_id.to_string(),
+                success: false,
+                output_json: serde_json::to_vec(&tool_results).unwrap_or_default(),
+                error: error_msg,
+                duration_ms: 0,
+                tokens_used: result.tokens_used,
+                model_used: result.model_used.clone(),
+            },
+        );
 
-            state.decision_logger.log_decision(
-                "ai_execution",
-                &[task_id.to_string()],
-                "failed",
-                &format!(
-                    "Task '{}' failed during tool execution",
-                    task_description
-                ),
-                intelligence_level,
-                "ai",
-            );
+        state.decision_logger.log_decision(
+            "ai_execution",
+            &[task_id.to_string()],
+            "failed",
+            &format!(
+                "Task '{}' failed during tool execution",
+                task_description
+            ),
+            intelligence_level,
+            "ai",
+        );
 
-            warn!("Task {task_id} failed during tool execution");
-            return;
-        }
+        warn!("Task {task_id} failed during tool execution");
+        return;
+    }
 
-        // All tools succeeded — build combined output
-        serde_json::to_vec(&serde_json::json!({
-            "ai_response": result.response_text,
-            "tool_results": tool_results,
-            "model_used": result.model_used,
-        }))
-        .unwrap_or_else(|_| b"{}".to_vec())
-    };
+    // All tools succeeded — build combined output
+    let output = serde_json::to_vec(&serde_json::json!({
+        "ai_response": result.response_text,
+        "tool_results": tool_results,
+        "model_used": result.model_used,
+    }))
+    .unwrap_or_else(|_| b"{}".to_vec());
+
+    // Post AI summary (reasoning + tool results) so the user sees what happened
+    let ai_summary = build_completion_summary(&result.response_text, &tool_results);
+    if !ai_summary.is_empty() {
+        state.goal_engine.add_message(goal_id, "ai", &ai_summary);
+    }
 
     // Add completion message to goal
     state.goal_engine.add_message(
