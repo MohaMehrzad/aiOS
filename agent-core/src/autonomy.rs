@@ -200,6 +200,68 @@ async fn autonomy_tick(
             }
         }
 
+        // ── Phase 1.5: Try heuristic execution (no AI needed) ──
+        // For well-structured tasks that map to a single tool with extractable
+        // parameters, execute directly without AI inference. This makes aiOS
+        // resilient to API outages and faster for simple tasks.
+        let clients_for_heuristic = state.clients.clone();
+        if let Some(heuristic_calls) = try_heuristic_execution(&task) {
+            info!(
+                "Heuristic execution: {} tool calls for task {task_id} (bypassing AI)",
+                heuristic_calls.len()
+            );
+
+            state.decision_logger.log_decision(
+                "task_routing",
+                &[task_id.clone()],
+                "heuristic_execution",
+                &format!(
+                    "Task '{}' executed via heuristic (no AI inference needed)",
+                    task.description
+                ),
+                level.as_str(),
+                "heuristic",
+            );
+
+            // Build a synthetic AI result from the heuristic tool calls
+            let heuristic_result = AiInferenceResult {
+                success: true,
+                response_text: format!(
+                    "{{\"reasoning\": \"Heuristic execution\", \"tool_calls\": [{}], \"result\": \"Executing directly\"}}",
+                    heuristic_calls.iter().map(|c| format!("{{\"tool\": \"{}\"}}", c.tool_name)).collect::<Vec<_>>().join(", ")
+                ),
+                tool_calls: heuristic_calls,
+                model_used: "heuristic".to_string(),
+                tokens_used: 0,
+            };
+
+            // Drop the lock, execute tools, reacquire for recording
+            let goal_id_h = goal_id.clone();
+            let task_id_h = task_id.clone();
+            let task_desc_h = task.description.clone();
+            let level_str_h = level.as_str().to_string();
+            drop(state);
+
+            let tool_execution = execute_tool_calls_unlocked(
+                &clients_for_heuristic,
+                &task_id_h,
+                &heuristic_result,
+            ).await;
+
+            let mut state = state_arc.write().await;
+            record_ai_result(
+                &mut state,
+                &task_id_h,
+                &goal_id_h,
+                &task_desc_h,
+                &level_str_h,
+                heuristic_result,
+                tool_execution,
+            ).await;
+
+            return Ok(());
+        }
+
         // No agent matched — prepare AI work item and release the lock
         let mut preferred_provider = get_preferred_provider(&state, &goal_id);
         let messages = state.goal_engine.get_messages(&goal_id);
@@ -698,6 +760,334 @@ async fn try_api_gateway_infer_with_provider(
             None
         }
     }
+}
+
+/// Try to execute a task heuristically without AI inference.
+/// Returns Some(tool_calls) if the task maps cleanly to known tools with
+/// extractable parameters. Returns None if AI inference is needed.
+fn try_heuristic_execution(task: &crate::proto::common::Task) -> Option<Vec<ToolCallRequest>> {
+    let desc = &task.description;
+    let desc_lower = desc.to_lowercase();
+    let tools = &task.required_tools;
+
+    // ── Email: extract to/subject/body from description ──
+    if tools.iter().any(|t| t == "email") || desc_lower.contains("email.send") {
+        if let Some(email_input) = extract_email_params(desc) {
+            return Some(vec![ToolCallRequest {
+                tool_name: "email.send".to_string(),
+                input_json: serde_json::to_vec(&email_input).ok()?,
+            }]);
+        }
+    }
+
+    // ── Monitor tools: no parameters needed ──
+    if desc_lower.contains("monitor.cpu") || (desc_lower.contains("cpu") && desc_lower.contains("usage")) {
+        return Some(vec![ToolCallRequest {
+            tool_name: "monitor.cpu".to_string(),
+            input_json: b"{}".to_vec(),
+        }]);
+    }
+    if desc_lower.contains("monitor.memory") || (desc_lower.contains("memory") && desc_lower.contains("usage")) {
+        return Some(vec![ToolCallRequest {
+            tool_name: "monitor.memory".to_string(),
+            input_json: b"{}".to_vec(),
+        }]);
+    }
+    if desc_lower.contains("monitor.disk") || (desc_lower.contains("disk") && (desc_lower.contains("usage") || desc_lower.contains("space"))) {
+        return Some(vec![ToolCallRequest {
+            tool_name: "monitor.disk".to_string(),
+            input_json: b"{}".to_vec(),
+        }]);
+    }
+
+    // ── Net: ping with extractable host ──
+    if desc_lower.contains("ping ") || desc_lower.contains("net.ping") {
+        if let Some(host) = extract_host_param(&desc_lower) {
+            let input = serde_json::json!({"host": host});
+            return Some(vec![ToolCallRequest {
+                tool_name: "net.ping".to_string(),
+                input_json: serde_json::to_vec(&input).ok()?,
+            }]);
+        }
+    }
+
+    // ── DNS lookup ──
+    if desc_lower.contains("dns") && (desc_lower.contains("lookup") || desc_lower.contains("resolve")) {
+        if let Some(host) = extract_host_param(&desc_lower) {
+            let input = serde_json::json!({"host": host});
+            return Some(vec![ToolCallRequest {
+                tool_name: "net.dns".to_string(),
+                input_json: serde_json::to_vec(&input).ok()?,
+            }]);
+        }
+    }
+
+    // ── File read with extractable path ──
+    if desc_lower.contains("read") || desc_lower.contains("cat") || desc_lower.contains("fs.read") {
+        if let Some(path) = extract_file_path(desc) {
+            let input = serde_json::json!({"path": path});
+            return Some(vec![ToolCallRequest {
+                tool_name: "fs.read".to_string(),
+                input_json: serde_json::to_vec(&input).ok()?,
+            }]);
+        }
+    }
+
+    // ── Service status ──
+    if (desc_lower.contains("service") || desc_lower.contains("systemctl"))
+        && desc_lower.contains("status")
+    {
+        if let Some(svc) = extract_service_param(&desc_lower) {
+            let input = serde_json::json!({"name": svc});
+            return Some(vec![ToolCallRequest {
+                tool_name: "service.status".to_string(),
+                input_json: serde_json::to_vec(&input).ok()?,
+            }]);
+        }
+    }
+
+    // ── Explicit tool call in description: "call tool.name with {...}" ──
+    if let Some(explicit) = extract_explicit_tool_call(desc) {
+        return Some(vec![explicit]);
+    }
+
+    None
+}
+
+/// Extract email parameters (to, subject, body) from a task description.
+/// Supports patterns like:
+///   "Send email to user@email.com with subject 'Hello' and body 'World'"
+///   "email.send {\"to\": \"user@email.com\", \"subject\": \"Hi\", \"body\": \"Test\"}"
+///   "Send an email to user@email.com — Subject: Hello — Body: This is the message"
+fn extract_email_params(desc: &str) -> Option<serde_json::Value> {
+    // Try inline JSON first: email.send {"to": "...", ...}
+    if let Some(json_start) = desc.find('{') {
+        let candidate = &desc[json_start..];
+        if let Some(parsed) = extract_json_from_text(candidate) {
+            if parsed.get("to").is_some() {
+                return Some(parsed);
+            }
+        }
+    }
+
+    let desc_lower = desc.to_lowercase();
+    let mut to = String::new();
+    let mut subject = String::new();
+    let mut body = String::new();
+
+    // Extract email address (to)
+    for word in desc.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-' && c != '+');
+        if clean.contains('@') && clean.contains('.') && clean.len() >= 5 {
+            to = clean.to_string();
+            break;
+        }
+    }
+    if to.is_empty() {
+        return None;
+    }
+
+    // Extract subject: look for "subject: ...", "subject '...'", "subject \"...\""
+    subject = extract_quoted_field(desc, &["subject:", "subject ", "subject=", "Subject:"])
+        .unwrap_or_default();
+
+    // Extract body: look for "body: ...", "body '...'", "body \"...\""
+    body = extract_quoted_field(desc, &["body:", "body ", "body=", "Body:", "message:", "Message:"])
+        .unwrap_or_default();
+
+    // If we still don't have subject/body, try splitting by common delimiters
+    if subject.is_empty() || body.is_empty() {
+        // Try "Subject: X — Body: Y" pattern
+        let parts: Vec<&str> = desc.split(" — ").collect();
+        for part in &parts {
+            let trimmed = part.trim();
+            if subject.is_empty() {
+                if let Some(s) = trimmed.strip_prefix("Subject:").or_else(|| trimmed.strip_prefix("subject:")) {
+                    subject = s.trim().to_string();
+                }
+            }
+            if body.is_empty() {
+                if let Some(b) = trimmed.strip_prefix("Body:").or_else(|| trimmed.strip_prefix("body:")).or_else(|| trimmed.strip_prefix("Message:")) {
+                    body = b.trim().to_string();
+                }
+            }
+        }
+    }
+
+    // Fallback: if we have a to address but no subject, use the description as subject
+    if subject.is_empty() {
+        // Use the part of the description that isn't the email address as subject
+        let without_email = desc.replace(&to, "").trim().to_string();
+        let cleaned = without_email
+            .trim_start_matches(|c: char| !c.is_alphanumeric())
+            .trim_end_matches(|c: char| !c.is_alphanumeric());
+        if !cleaned.is_empty() && cleaned.len() < 200 {
+            subject = cleaned.to_string();
+        } else {
+            subject = "Message from aiOS".to_string();
+        }
+    }
+
+    if body.is_empty() {
+        body = subject.clone();
+    }
+
+    Some(serde_json::json!({
+        "to": to,
+        "subject": subject,
+        "body": body,
+    }))
+}
+
+/// Extract a quoted or delimited field value after a prefix keyword.
+fn extract_quoted_field(text: &str, prefixes: &[&str]) -> Option<String> {
+    let text_lower = text.to_lowercase();
+
+    for prefix in prefixes {
+        let prefix_lower = prefix.to_lowercase();
+        if let Some(pos) = text_lower.find(&prefix_lower) {
+            let after = &text[pos + prefix.len()..];
+            let after = after.trim_start();
+
+            // Try quoted value: 'value' or "value"
+            if after.starts_with('\'') || after.starts_with('"') {
+                let quote = after.chars().next().unwrap();
+                if let Some(end) = after[1..].find(quote) {
+                    let value = &after[1..1 + end];
+                    if !value.is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+
+            // Try unquoted: take until next keyword or delimiter
+            let terminators = [" body:", " body ", " Body:", " message:", " Message:",
+                               " subject:", " Subject:", " — ", " with ", " and body"];
+            let mut end_pos = after.len();
+            for term in &terminators {
+                if let Some(p) = after.to_lowercase().find(&term.to_lowercase()) {
+                    if p < end_pos && p > 0 {
+                        end_pos = p;
+                    }
+                }
+            }
+            let value = after[..end_pos].trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+/// Extract a hostname or IP address from text
+fn extract_host_param(text: &str) -> Option<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+
+    // Look for word after "ping" or host-like patterns
+    for (i, word) in words.iter().enumerate() {
+        if (*word == "ping" || *word == "net.ping" || *word == "resolve" || *word == "lookup")
+            && i + 1 < words.len()
+        {
+            let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
+            if next.contains('.') || next.contains(':') {
+                return Some(next.to_string());
+            }
+        }
+    }
+
+    // Scan for anything that looks like a hostname or IP
+    for word in &words {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
+        if clean.contains('.') && clean.len() >= 4 {
+            // Looks like IP or domain
+            let first_char = clean.chars().next().unwrap_or(' ');
+            if first_char.is_alphanumeric() {
+                return Some(clean.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract a file path from task description
+fn extract_file_path(desc: &str) -> Option<String> {
+    for word in desc.split_whitespace() {
+        let clean = word.trim_matches(|c: char| c == '\'' || c == '"' || c == '`');
+        if clean.starts_with('/') && clean.len() >= 2 {
+            return Some(clean.to_string());
+        }
+    }
+    // Look for quoted paths
+    for quote in &['\'', '"', '`'] {
+        let q = *quote;
+        if let Some(start) = desc.find(q) {
+            if let Some(end) = desc[start + 1..].find(q) {
+                let path = &desc[start + 1..start + 1 + end];
+                if path.starts_with('/') {
+                    return Some(path.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract a service name from description
+fn extract_service_param(text: &str) -> Option<String> {
+    let known = [
+        "nginx", "apache", "postgres", "mysql", "redis", "docker",
+        "ssh", "sshd", "cron", "mongodb", "elasticsearch", "podman",
+        "aios-orchestrator", "aios-api-gateway", "aios-runtime",
+        "aios-tools", "aios-memory",
+    ];
+    for svc in &known {
+        if text.contains(svc) {
+            return Some(svc.to_string());
+        }
+    }
+    None
+}
+
+/// Extract explicit tool call from description: "call tool.name with {...}"
+fn extract_explicit_tool_call(desc: &str) -> Option<ToolCallRequest> {
+    // Look for "tool.name" followed by JSON
+    let known_namespaces = [
+        "fs.", "process.", "service.", "net.", "firewall.", "pkg.",
+        "sec.", "monitor.", "hw.", "web.", "git.", "code.", "self.",
+        "plugin.", "container.", "email.",
+    ];
+
+    for ns in &known_namespaces {
+        if let Some(pos) = desc.find(ns) {
+            let tool_candidate = &desc[pos..];
+            // Extract tool name (namespace.action)
+            let tool_end = tool_candidate.find(|c: char| !c.is_alphanumeric() && c != '.' && c != '_')
+                .unwrap_or(tool_candidate.len());
+            let tool_name = &tool_candidate[..tool_end];
+
+            // Must have namespace.action format
+            let parts: Vec<&str> = tool_name.split('.').collect();
+            if parts.len() != 2 || parts[1].is_empty() {
+                continue;
+            }
+
+            // Look for JSON after the tool name
+            let after_tool = &desc[pos + tool_end..];
+            let input = if let Some(json_start) = after_tool.find('{') {
+                extract_json_from_text(&after_tool[json_start..])
+                    .unwrap_or(serde_json::json!({}))
+            } else {
+                serde_json::json!({})
+            };
+
+            return Some(ToolCallRequest {
+                tool_name: tool_name.to_string(),
+                input_json: serde_json::to_vec(&input).ok()?,
+            });
+        }
+    }
+    None
 }
 
 /// Parse tool calls from AI response JSON
@@ -1680,6 +2070,201 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].tool_name, "fs.read");
         assert_eq!(calls[1].tool_name, "net.ping");
+    }
+
+    #[test]
+    fn test_heuristic_email_with_quotes() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "Send email to user@example.com with subject 'Hello World' and body 'This is a test message'".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec!["email".into()],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        let calls = calls.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "email.send");
+
+        let input: serde_json::Value = serde_json::from_slice(&calls[0].input_json).unwrap();
+        assert_eq!(input["to"], "user@example.com");
+        assert_eq!(input["subject"], "Hello World");
+        assert_eq!(input["body"], "This is a test message");
+    }
+
+    #[test]
+    fn test_heuristic_email_with_json() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: r#"email.send {"to": "test@gmail.com", "subject": "Test", "body": "Hello"}"#.into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec!["email".into()],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        let calls = calls.unwrap();
+        assert_eq!(calls[0].tool_name, "email.send");
+        let input: serde_json::Value = serde_json::from_slice(&calls[0].input_json).unwrap();
+        assert_eq!(input["to"], "test@gmail.com");
+    }
+
+    #[test]
+    fn test_heuristic_monitor_cpu() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "Check CPU usage".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec!["monitor".into()],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        assert_eq!(calls.unwrap()[0].tool_name, "monitor.cpu");
+    }
+
+    #[test]
+    fn test_heuristic_ping() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "Ping 8.8.8.8".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec!["net".into()],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        let calls = calls.unwrap();
+        assert_eq!(calls[0].tool_name, "net.ping");
+        let input: serde_json::Value = serde_json::from_slice(&calls[0].input_json).unwrap();
+        assert_eq!(input["host"], "8.8.8.8");
+    }
+
+    #[test]
+    fn test_heuristic_fs_read() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "Read file /etc/hostname".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec!["fs".into()],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        let calls = calls.unwrap();
+        assert_eq!(calls[0].tool_name, "fs.read");
+        let input: serde_json::Value = serde_json::from_slice(&calls[0].input_json).unwrap();
+        assert_eq!(input["path"], "/etc/hostname");
+    }
+
+    #[test]
+    fn test_heuristic_explicit_tool_call() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: r#"call email.send {"to": "a@b.com", "subject": "Hi", "body": "Test"}"#.into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "reactive".into(),
+            required_tools: vec![],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_some());
+        let calls = calls.unwrap();
+        assert_eq!(calls[0].tool_name, "email.send");
+        let input: serde_json::Value = serde_json::from_slice(&calls[0].input_json).unwrap();
+        assert_eq!(input["to"], "a@b.com");
+    }
+
+    #[test]
+    fn test_heuristic_no_match() {
+        let task = crate::proto::common::Task {
+            id: "t1".into(),
+            goal_id: "g1".into(),
+            description: "Analyze the system architecture and propose improvements".into(),
+            assigned_agent: String::new(),
+            status: "pending".into(),
+            intelligence_level: "strategic".into(),
+            required_tools: vec![],
+            depends_on: vec![],
+            input_json: vec![],
+            output_json: vec![],
+            created_at: 0,
+            started_at: 0,
+            completed_at: 0,
+            error: String::new(),
+        };
+
+        let calls = try_heuristic_execution(&task);
+        assert!(calls.is_none());
+    }
+
+    #[test]
+    fn test_extract_email_params_dash_delimiter() {
+        let desc = "Send email to test@example.com — Subject: Time to Sleep! — Body: Hey, this is aiOS reminding you to go to sleep.";
+        let params = extract_email_params(desc).unwrap();
+        assert_eq!(params["to"], "test@example.com");
+        assert_eq!(params["subject"], "Time to Sleep!");
+        assert!(params["body"].as_str().unwrap().contains("aiOS"));
     }
 
     #[tokio::test]

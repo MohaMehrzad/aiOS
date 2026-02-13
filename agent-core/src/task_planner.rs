@@ -249,13 +249,28 @@ impl TaskPlanner {
     pub fn classify_complexity(&self, description: &str) -> IntelligenceLevel {
         let desc_lower = description.to_lowercase();
 
-        // Reactive: simple status checks, health checks
+        // Reactive: simple status checks, health checks, direct tool calls
         if desc_lower.contains("status")
             || desc_lower.contains("health")
             || desc_lower.contains("uptime")
             || desc_lower.contains("ping")
         {
             return IntelligenceLevel::Reactive;
+        }
+
+        // Reactive: email sending (heuristic execution can handle this directly)
+        if (desc_lower.contains("email") || desc_lower.contains("mail"))
+            && (desc_lower.contains("send") || desc_lower.contains("@"))
+        {
+            return IntelligenceLevel::Reactive;
+        }
+
+        // Reactive: explicit tool call in description (e.g. "call monitor.cpu")
+        if desc_lower.contains("call ") || desc_lower.contains("execute ") || desc_lower.contains("run ") {
+            let tool_patterns = ["fs.", "process.", "service.", "net.", "monitor.", "email.", "pkg.", "sec."];
+            if tool_patterns.iter().any(|p| desc_lower.contains(p)) {
+                return IntelligenceLevel::Reactive;
+            }
         }
 
         // Strategic: complex reasoning, planning, security analysis
