@@ -75,7 +75,34 @@ async fn autonomy_tick(
 
     debug!("Autonomy tick: {active_goals} active goals");
 
-    // 2. Get next unblocked task from task planner
+    // 2. Decompose pending goals that have no tasks yet
+    let (pending_goals, _) = state.goal_engine.list_goals("pending", 10, 0).await;
+    for goal in &pending_goals {
+        let tasks = state.goal_engine.get_goal_tasks(&goal.id);
+        if tasks.is_empty() {
+            info!("Decomposing pending goal {} into tasks", goal.id);
+            match state
+                .task_planner
+                .decompose_goal(&goal.id, &goal.description)
+                .await
+            {
+                Ok(new_tasks) => {
+                    let task_count = new_tasks.len();
+                    state.goal_engine.add_tasks(&goal.id, new_tasks);
+                    state.goal_engine.update_status(&goal.id, "in_progress");
+                    info!(
+                        "Goal {} decomposed into {task_count} tasks",
+                        goal.id
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to decompose goal {}: {e}", goal.id);
+                }
+            }
+        }
+    }
+
+    // 3. Get next unblocked task from task planner
     let next_task = state.task_planner.next_task().cloned();
     let task = match next_task {
         Some(t) => t,

@@ -367,6 +367,11 @@ impl GoalEngine {
             .count()
     }
 
+    /// Get tasks for a goal
+    pub fn get_goal_tasks(&self, goal_id: &str) -> Vec<Task> {
+        self.goal_tasks.get(goal_id).cloned().unwrap_or_default()
+    }
+
     /// Add tasks to a goal
     pub fn add_tasks(&mut self, goal_id: &str, tasks: Vec<Task>) {
         if let Some(existing) = self.goal_tasks.get_mut(goal_id) {
