@@ -522,37 +522,25 @@ async fn try_api_gateway_infer_with_provider(
 fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
     let mut calls = Vec::new();
 
-    // Try to parse as JSON
-    let text = response_text.trim();
-    let json_str = if text.starts_with("```") {
-        // Strip markdown code fences
-        let lines: Vec<&str> = text.lines().collect();
-        let start = if lines.first().map_or(false, |l| l.starts_with("```")) { 1 } else { 0 };
-        let end = if lines.last().map_or(false, |l| l.trim() == "```") {
-            lines.len() - 1
-        } else {
-            lines.len()
-        };
-        lines[start..end].join("\n")
-    } else {
-        text.to_string()
+    // Use the robust JSON extractor that handles prose wrappers, markdown fences, etc.
+    let parsed = match extract_json_from_text(response_text) {
+        Some(v) => v,
+        None => return calls,
     };
 
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json_str) {
-        if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
-            for tc in tool_calls {
-                let tool_name = tc.get("tool").and_then(|v| v.as_str()).unwrap_or("");
-                let input = tc.get("input").cloned().unwrap_or(serde_json::Value::Object(
-                    serde_json::Map::new(),
-                ));
+    if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+        for tc in tool_calls {
+            let tool_name = tc.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+            let input = tc.get("input").cloned().unwrap_or(serde_json::Value::Object(
+                serde_json::Map::new(),
+            ));
 
-                if !tool_name.is_empty() {
-                    if let Ok(input_bytes) = serde_json::to_vec(&input) {
-                        calls.push(ToolCallRequest {
-                            tool_name: tool_name.to_string(),
-                            input_json: input_bytes,
-                        });
-                    }
+            if !tool_name.is_empty() {
+                if let Ok(input_bytes) = serde_json::to_vec(&input) {
+                    calls.push(ToolCallRequest {
+                        tool_name: tool_name.to_string(),
+                        input_json: input_bytes,
+                    });
                 }
             }
         }
