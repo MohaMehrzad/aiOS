@@ -66,7 +66,7 @@ pub struct OrchestratorState {
     pub decision_logger: decision_logger::DecisionLogger,
     pub started_at: Instant,
     pub cancel_token: CancellationToken,
-    pub clients: clients::ServiceClients,
+    pub clients: Arc<clients::ServiceClients>,
     pub health_checker: Arc<RwLock<health::HealthChecker>>,
     pub cluster: Arc<RwLock<cluster::ClusterManager>>,
 }
@@ -620,7 +620,7 @@ async fn main() -> Result<()> {
         decision_logger: decision_logger::DecisionLogger::new(),
         started_at: Instant::now(),
         cancel_token: cancel_token.clone(),
-        clients: clients::ServiceClients::new(),
+        clients: Arc::new(clients::ServiceClients::new()),
         health_checker: health_checker.clone(),
         cluster: Arc::new(RwLock::new(cluster::ClusterManager::new(
             &std::env::var("AIOS_NODE_ID").unwrap_or_else(|_| "local".to_string()),

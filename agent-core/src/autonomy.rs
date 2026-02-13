@@ -60,209 +60,294 @@ pub async fn run_autonomy_loop(
     info!("Autonomy loop stopped");
 }
 
+/// Data extracted from state for AI inference (allows dropping the write lock)
+struct AiWorkItem {
+    task: crate::proto::common::Task,
+    task_id: String,
+    goal_id: String,
+    level: IntelligenceLevel,
+    preferred_provider: String,
+    messages: Vec<crate::goal_engine::GoalMessage>,
+    clients: Arc<crate::clients::ServiceClients>,
+}
+
 /// Single tick of the autonomy loop
 async fn autonomy_tick(
-    state: &Arc<RwLock<OrchestratorState>>,
+    state_arc: &Arc<RwLock<OrchestratorState>>,
     _config: &AutonomyConfig,
 ) -> anyhow::Result<()> {
-    let mut state = state.write().await;
+    // ── Phase 1: Hold write lock for decomposition + task selection ──
+    let ai_work = {
+        let mut state = state_arc.write().await;
 
-    // 1. Check goal engine for active goals
-    let active_goals = state.goal_engine.active_goal_count();
-    if active_goals == 0 {
-        return Ok(());
-    }
+        // 1. Check goal engine for active goals
+        let active_goals = state.goal_engine.active_goal_count();
+        if active_goals == 0 {
+            return Ok(());
+        }
 
-    debug!("Autonomy tick: {active_goals} active goals");
+        debug!("Autonomy tick: {active_goals} active goals");
 
-    // 2. Decompose pending goals that have no tasks yet
-    let (pending_goals, _) = state.goal_engine.list_goals("pending", 10, 0).await;
-    for goal in &pending_goals {
-        let tasks = state.goal_engine.get_goal_tasks(&goal.id);
-        if tasks.is_empty() {
-            info!("Decomposing pending goal {} into tasks", goal.id);
-            match state
-                .task_planner
-                .decompose_goal(&goal.id, &goal.description)
-                .await
-            {
-                Ok(new_tasks) => {
-                    let task_count = new_tasks.len();
-                    state.goal_engine.add_tasks(&goal.id, new_tasks);
-                    state.goal_engine.update_status(&goal.id, "in_progress");
-                    info!(
-                        "Goal {} decomposed into {task_count} tasks",
-                        goal.id
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to decompose goal {}: {e}", goal.id);
+        // 2. Decompose pending goals that have no tasks yet
+        let (pending_goals, _) = state.goal_engine.list_goals("pending", 10, 0).await;
+        for goal in &pending_goals {
+            let tasks = state.goal_engine.get_goal_tasks(&goal.id);
+            if tasks.is_empty() {
+                info!("Decomposing pending goal {} into tasks", goal.id);
+                match state
+                    .task_planner
+                    .decompose_goal(&goal.id, &goal.description)
+                    .await
+                {
+                    Ok(new_tasks) => {
+                        let task_count = new_tasks.len();
+                        state.goal_engine.add_tasks(&goal.id, new_tasks);
+                        state.goal_engine.update_status(&goal.id, "in_progress");
+                        info!(
+                            "Goal {} decomposed into {task_count} tasks",
+                            goal.id
+                        );
+                    }
+                    Err(e) => {
+                        error!("Failed to decompose goal {}: {e}", goal.id);
+                    }
                 }
             }
         }
-    }
 
-    // 3. Get next unblocked task from task planner
-    let next_task = state.task_planner.next_task().cloned();
-    let task = match next_task {
-        Some(t) => t,
-        None => return Ok(()),
-    };
+        // 3. Get next unblocked task from task planner
+        let next_task = state.task_planner.next_task().cloned();
+        let task = match next_task {
+            Some(t) => t,
+            None => return Ok(()),
+        };
 
-    let task_id = task.id.clone();
-    let goal_id = task.goal_id.clone();
-    let level = IntelligenceLevel::from_str(&task.intelligence_level);
+        let task_id = task.id.clone();
+        let goal_id = task.goal_id.clone();
+        let level = IntelligenceLevel::from_str(&task.intelligence_level);
 
-    // Mark task as in-progress
-    state.task_planner.mark_in_progress(&task_id);
-    state.goal_engine.update_task_status(&goal_id, &task_id, "in_progress");
+        // Mark task as in-progress
+        state.task_planner.mark_in_progress(&task_id);
+        state.goal_engine.update_task_status(&goal_id, &task_id, "in_progress");
 
-    // 3. Route task via agent router or handle directly
-    let agent_id = state.agent_router.route_task(&task);
+        // 4. Route task via agent router or handle directly
+        let agent_id = state.agent_router.route_task(&task);
 
-    if let Some(ref agent_id) = agent_id {
-        info!("Dispatching task {task_id} to agent {agent_id}");
-        state.agent_router.assign_task(agent_id, &task_id);
+        if let Some(ref agent_id) = agent_id {
+            info!("Dispatching task {task_id} to agent {agent_id}");
+            state.agent_router.assign_task(agent_id, &task_id);
 
-        state.decision_logger.log_decision(
-            "task_routing",
-            &[agent_id.clone()],
-            "agent_dispatch",
-            &format!(
-                "Task {task_id} dispatched to agent {agent_id} (level: {})",
-                level.as_str()
-            ),
-            level.as_str(),
-            "heuristic",
-        );
+            state.decision_logger.log_decision(
+                "task_routing",
+                &[agent_id.clone()],
+                "agent_dispatch",
+                &format!(
+                    "Task {task_id} dispatched to agent {agent_id} (level: {})",
+                    level.as_str()
+                ),
+                level.as_str(),
+                "heuristic",
+            );
 
-        // Agent polls via GetAssignedTask, executes, reports via ReportTaskResult.
-        // Dead agent recovery at the end of this tick handles timeout.
-        return Ok(());
-    }
+            // Agent polls via GetAssignedTask, executes, reports via ReportTaskResult.
+            // Dead agent recovery at the end of this tick handles timeout.
+            return Ok(());
+        }
 
-    // No local agent matched — try cluster routing if enabled
-    if std::env::var("AIOS_CLUSTER_ENABLED").unwrap_or_default() == "true" {
-        let cluster_guard = state.cluster.read().await;
-        if let Some(remote_node_id) = state.agent_router.route_task_to_node(&task, &cluster_guard) {
-            drop(cluster_guard);
-            info!("Routing task {task_id} to remote node {remote_node_id}");
+        // No local agent matched — try cluster routing if enabled
+        if std::env::var("AIOS_CLUSTER_ENABLED").unwrap_or_default() == "true" {
+            let cluster_guard = state.cluster.read().await;
+            if let Some(remote_node_id) = state.agent_router.route_task_to_node(&task, &cluster_guard) {
+                drop(cluster_guard);
+                info!("Routing task {task_id} to remote node {remote_node_id}");
 
-            let mut remote = crate::remote_exec::RemoteExecutor::new();
-            match remote
-                .submit_remote_goal(
-                    &remote_node_id,
-                    &task.description,
-                    5, // default priority
-                    &format!("cluster:{}", task_id),
-                )
-                .await
-            {
-                Ok(remote_goal_id) => {
-                    info!(
-                        "Task {task_id} submitted to remote node {remote_node_id} as goal {remote_goal_id}"
-                    );
-                    state.task_planner.complete_task(&task_id, Vec::new());
-                    state
-                        .goal_engine
-                        .update_task_status(&goal_id, &task_id, "completed");
-                    state.decision_logger.log_decision(
-                        "task_routing",
-                        &[remote_node_id],
-                        "cluster_dispatch",
-                        &format!("Task {task_id} routed to remote cluster node"),
-                        level.as_str(),
-                        "cluster",
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    warn!("Remote dispatch failed for {task_id}: {e}, falling back to AI inference");
+                let mut remote = crate::remote_exec::RemoteExecutor::new();
+                match remote
+                    .submit_remote_goal(
+                        &remote_node_id,
+                        &task.description,
+                        5, // default priority
+                        &format!("cluster:{}", task_id),
+                    )
+                    .await
+                {
+                    Ok(remote_goal_id) => {
+                        info!(
+                            "Task {task_id} submitted to remote node {remote_node_id} as goal {remote_goal_id}"
+                        );
+                        state.task_planner.complete_task(&task_id, Vec::new());
+                        state
+                            .goal_engine
+                            .update_task_status(&goal_id, &task_id, "completed");
+                        state.decision_logger.log_decision(
+                            "task_routing",
+                            &[remote_node_id],
+                            "cluster_dispatch",
+                            &format!("Task {task_id} routed to remote cluster node"),
+                            level.as_str(),
+                            "cluster",
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        warn!("Remote dispatch failed for {task_id}: {e}, falling back to AI inference");
+                    }
                 }
             }
         }
-    }
 
-    // No agent matched (local or remote) — execute via AI inference
-    {
+        // No agent matched — prepare AI work item and release the lock
         let mut preferred_provider = get_preferred_provider(&state, &goal_id);
         let messages = state.goal_engine.get_messages(&goal_id);
+        let clients = state.clients.clone(); // Arc clone — cheap
 
-        // Default to Qwen3 for task execution — 128K context, follows
-        // tool-calling JSON format. TinyLlama is too small for this.
         if preferred_provider.is_empty() {
             preferred_provider = "qwen3".to_string();
         }
 
-        // Reactive/Operational/Tactical use API gateway;
-        // Strategic also uses API gateway (it can route to Claude/OpenAI)
+        Some(AiWorkItem {
+            task,
+            task_id,
+            goal_id,
+            level,
+            preferred_provider,
+            messages,
+            clients,
+        })
+    }; // ── Write lock dropped here ──
+
+    // ── Phase 2: AI inference WITHOUT holding the write lock ──
+    if let Some(work) = ai_work {
         let backend = AiBackend::ApiGateway;
         info!(
-            "Routing {} task {task_id} to API gateway (provider: {preferred_provider})",
-            level.as_str()
+            "Routing {} task {} to API gateway (provider: {})",
+            work.level.as_str(),
+            work.task_id,
+            work.preferred_provider
         );
 
         let result = execute_ai_task(
-            &state.clients,
-            &task.description,
-            level.as_str(),
+            &work.clients,
+            &work.task.description,
+            work.level.as_str(),
             backend,
-            &preferred_provider,
-            &messages,
+            &work.preferred_provider,
+            &work.messages,
         )
         .await;
 
-        handle_ai_result(
+        // Execute tool calls WITHOUT holding the lock
+        let tool_execution = execute_tool_calls_unlocked(
+            &work.clients,
+            &work.task_id,
+            &result,
+        )
+        .await;
+
+        // ── Phase 3: Reacquire write lock to record results ──
+        let mut state = state_arc.write().await;
+
+        record_ai_result(
             &mut state,
-            &task_id,
-            &goal_id,
-            &task.description,
-            level.as_str(),
+            &work.task_id,
+            &work.goal_id,
+            &work.task.description,
+            work.level.as_str(),
             result,
+            tool_execution,
         )
         .await;
     }
 
-    // 4. Check for stuck agent-assigned tasks (timeout recovery)
-    // If an agent died or got stuck, its tasks would sit in "in_progress"
-    // forever. Detect dead agents and re-queue their tasks.
-    let dead_agents = state.agent_router.dead_agents();
-    for dead_id in &dead_agents {
-        if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
-            warn!(
-                "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
-            );
-            state.agent_router.task_completed(dead_id, false);
-            // Re-queue: mark as pending so the autonomy loop picks it up again
-            state.task_planner.resume_task(&stuck_task_id);
-        }
-    }
+    // ── Phase 4: Brief write lock for housekeeping ──
+    {
+        let mut state = state_arc.write().await;
 
-    // 5. Check if any goals are complete
-    let (goals, _) = state.goal_engine.list_goals("", 100, 0).await;
-    for goal in goals {
-        if goal.status == "pending" || goal.status == "in_progress" {
-            let progress = state.goal_engine.calculate_progress(&goal.id).await;
-            if progress >= 100.0 {
-                state.goal_engine.update_status(&goal.id, "completed");
-                info!("Goal {} completed", goal.id);
-
-                // Log the completion decision
-                state.decision_logger.log_decision(
-                    "goal_completion",
-                    &[goal.id.clone()],
-                    "completed",
-                    &format!("All tasks for goal '{}' completed successfully", goal.description),
-                    "reactive",
-                    "heuristic",
+        // Check for stuck agent-assigned tasks (timeout recovery)
+        let dead_agents = state.agent_router.dead_agents();
+        for dead_id in &dead_agents {
+            if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
+                warn!(
+                    "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
                 );
-            } else if progress > 0.0 && goal.status == "pending" {
-                state.goal_engine.update_status(&goal.id, "in_progress");
+                state.agent_router.task_completed(dead_id, false);
+                state.task_planner.resume_task(&stuck_task_id);
+            }
+        }
+
+        // Check if any goals are complete
+        let (goals, _) = state.goal_engine.list_goals("", 100, 0).await;
+        for goal in goals {
+            if goal.status == "pending" || goal.status == "in_progress" {
+                let progress = state.goal_engine.calculate_progress(&goal.id).await;
+                if progress >= 100.0 {
+                    state.goal_engine.update_status(&goal.id, "completed");
+                    info!("Goal {} completed", goal.id);
+
+                    state.decision_logger.log_decision(
+                        "goal_completion",
+                        &[goal.id.clone()],
+                        "completed",
+                        &format!("All tasks for goal '{}' completed successfully", goal.description),
+                        "reactive",
+                        "heuristic",
+                    );
+                } else if progress > 0.0 && goal.status == "pending" {
+                    state.goal_engine.update_status(&goal.id, "in_progress");
+                }
             }
         }
     }
 
     Ok(())
+}
+
+/// Result of executing tool calls outside the write lock
+struct ToolExecutionResult {
+    tool_results: Vec<serde_json::Value>,
+    all_succeeded: bool,
+}
+
+/// Execute tool calls from an AI response WITHOUT holding the state write lock.
+/// Returns the results so they can be recorded once the lock is reacquired.
+async fn execute_tool_calls_unlocked(
+    clients: &crate::clients::ServiceClients,
+    task_id: &str,
+    result: &AiInferenceResult,
+) -> ToolExecutionResult {
+    if result.tool_calls.is_empty() || !result.success {
+        return ToolExecutionResult {
+            tool_results: Vec::new(),
+            all_succeeded: true,
+        };
+    }
+
+    let mut tool_results = Vec::new();
+    let mut all_succeeded = true;
+
+    for tc in &result.tool_calls {
+        info!("Executing tool '{}' for task {task_id}", tc.tool_name);
+        match execute_tool_call(clients, task_id, &tc.tool_name, &tc.input_json).await {
+            Ok(tool_result) => {
+                info!("Tool '{}' succeeded for task {task_id}", tc.tool_name);
+                tool_results.push(tool_result);
+            }
+            Err(e) => {
+                warn!("Tool '{}' failed for task {task_id}: {e}", tc.tool_name);
+                all_succeeded = false;
+                tool_results.push(serde_json::json!({
+                    "tool": tc.tool_name,
+                    "success": false,
+                    "error": e.to_string(),
+                }));
+            }
+        }
+    }
+
+    ToolExecutionResult {
+        tool_results,
+        all_succeeded,
+    }
 }
 
 /// Which AI backend to use for inference
@@ -1041,14 +1126,17 @@ fn build_completion_summary(response_text: &str, tool_results: &[serde_json::Val
     }
 }
 
-/// Handle the result of an AI inference call — execute tool calls and record results
-async fn handle_ai_result(
+/// Record the result of AI inference + tool execution into state.
+/// Called AFTER tool execution completes, while holding the write lock.
+/// Tool execution happens outside the lock via execute_tool_calls_unlocked().
+async fn record_ai_result(
     state: &mut OrchestratorState,
     task_id: &str,
     goal_id: &str,
     task_description: &str,
     intelligence_level: &str,
     result: AiInferenceResult,
+    tool_exec: ToolExecutionResult,
 ) {
     // Log what the AI returned for debugging
     let tool_count = result.tool_calls.len();
@@ -1098,14 +1186,11 @@ async fn handle_ai_result(
     // An OS should DO things — no tools executed means no work was done.
     // Show the AI's response to the user and await their input.
     if result.tool_calls.is_empty() {
-        // Extract a readable response from the AI output
         let ai_text = extract_ai_display_text(&result.response_text);
 
-        // Check if AI is explicitly asking for clarification
         if let Some(clarification) = parse_clarification(&result.response_text) {
             state.goal_engine.add_message(goal_id, "ai", &clarification);
         } else if !ai_text.is_empty() {
-            // AI gave an analysis/response but executed nothing
             state.goal_engine.add_message(goal_id, "ai", &ai_text);
         } else {
             state.goal_engine.add_message(
@@ -1124,31 +1209,11 @@ async fn handle_ai_result(
         return;
     }
 
-    // Execute each tool call via the tools gRPC service
-    let mut tool_results: Vec<serde_json::Value> = Vec::new();
-    let mut all_succeeded = true;
-
-    for tc in &result.tool_calls {
-        info!(
-            "Executing tool '{}' for task {task_id}",
-            tc.tool_name
-        );
-        match execute_tool_call(&state.clients, task_id, &tc.tool_name, &tc.input_json).await {
-            Ok(tool_result) => {
-                info!("Tool '{}' succeeded for task {task_id}", tc.tool_name);
-                tool_results.push(tool_result);
-            }
-            Err(e) => {
-                warn!("Tool '{}' failed for task {task_id}: {e}", tc.tool_name);
-                all_succeeded = false;
-                tool_results.push(serde_json::json!({
-                    "tool": tc.tool_name,
-                    "success": false,
-                    "error": e.to_string(),
-                }));
-            }
-        }
-    }
+    // Record tool execution results (tools were already executed outside the lock)
+    let ToolExecutionResult {
+        tool_results,
+        all_succeeded,
+    } = tool_exec;
 
     if !all_succeeded {
         let error_msg = tool_results
@@ -1312,7 +1377,7 @@ mod tests {
             decision_logger: crate::decision_logger::DecisionLogger::new(),
             started_at: std::time::Instant::now(),
             cancel_token: CancellationToken::new(),
-            clients: crate::clients::ServiceClients::new(),
+            clients: Arc::new(crate::clients::ServiceClients::new()),
             health_checker: Arc::new(RwLock::new(crate::health::HealthChecker::new())),
             cluster: Arc::new(RwLock::new(crate::cluster::ClusterManager::new("test"))),
         }));
