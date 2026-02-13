@@ -472,6 +472,9 @@ async fn submit_goal(
                 Ok(tasks) => {
                     let task_count = tasks.len();
                     s.goal_engine.add_tasks(&id, tasks);
+                    if task_count > 0 {
+                        s.goal_engine.update_status(&id, "in_progress");
+                    }
                     info!("Goal {id} decomposed into {task_count} tasks (provider: {provider})");
                 }
                 Err(e) => {

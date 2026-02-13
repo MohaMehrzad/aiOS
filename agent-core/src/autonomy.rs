@@ -88,7 +88,8 @@ async fn autonomy_tick(
 
         debug!("Autonomy tick: {active_goals} active goals");
 
-        // 2. Decompose pending goals that have no tasks yet
+        // 2. Decompose pending goals that have no tasks yet,
+        //    or advance pending goals that already have tasks (from submit_goal)
         let (pending_goals, _) = state.goal_engine.list_goals("pending", 10, 0).await;
         for goal in &pending_goals {
             let tasks = state.goal_engine.get_goal_tasks(&goal.id);
@@ -112,6 +113,9 @@ async fn autonomy_tick(
                         error!("Failed to decompose goal {}: {e}", goal.id);
                     }
                 }
+            } else {
+                // Tasks already exist (from submit_goal handler) — advance to in_progress
+                state.goal_engine.update_status(&goal.id, "in_progress");
             }
         }
 
