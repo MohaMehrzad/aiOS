@@ -89,9 +89,10 @@ impl AgentRouter {
                 agent.status == "idle" && agent.current_task.is_none()
             })
             .filter(|(_, agent)| {
-                // Check capabilities match
+                // Check capabilities match — tasks with no required_tools
+                // go to AI inference, not agents
                 if required_tools.is_empty() {
-                    return true;
+                    return false;
                 }
                 required_tools.iter().any(|tool| {
                     agent.registration.tool_namespaces.contains(tool)
@@ -114,7 +115,7 @@ impl AgentRouter {
                 })
                 .filter(|(_, agent)| {
                     if required_tools.is_empty() {
-                        return true;
+                        return false;
                     }
                     required_tools.iter().any(|tool| {
                         agent.registration.tool_namespaces.contains(tool)
@@ -351,10 +352,11 @@ mod tests {
             .register_agent(make_registration("agent-1", "system", vec!["fs"]))
             .await;
 
-        // Task with no required_tools should match any agent
+        // Task with no required_tools should NOT match any agent
+        // (falls through to AI inference which knows the actual tool names)
         let task = make_task(vec![]);
         let agent = router.route_task(&task);
-        assert_eq!(agent, Some("agent-1".to_string()));
+        assert_eq!(agent, None);
     }
 
     #[tokio::test]
