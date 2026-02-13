@@ -290,31 +290,29 @@ async fn execute_ai_task(
         prompt.push_str("\nExecute the task using the provided context.\n\n");
     }
 
-    // Tell the AI what tools are available
+    // Tell the AI what tools are available — dynamically queried from the tool registry
+    let tool_catalog = query_tool_catalog(clients).await;
+    prompt.push_str(&tool_catalog);
+
     prompt.push_str(
-        "Available tools you can call:\n\
-         - fs.read, fs.write, fs.list, fs.delete, fs.mkdir, fs.copy, fs.move, fs.stat, fs.search\n\
-         - process.list, process.kill, process.spawn, process.info\n\
-         - service.list, service.start, service.stop, service.restart, service.status\n\
-         - net.ping, net.dns, net.interfaces, net.ports, net.connections, net.curl\n\
-         - firewall.list, firewall.add, firewall.remove\n\
-         - pkg.install, pkg.remove, pkg.list, pkg.search, pkg.update\n\
-         - sec.audit, sec.permissions, sec.users, sec.processes\n\
-         - monitor.cpu, monitor.memory, monitor.disk, monitor.load, monitor.processes\n\
-         - web.fetch, web.download, web.search\n\
-         - git.clone, git.status, git.pull, git.commit, git.log\n\
-         - code.run, code.analyze, code.format\n\
-         - self.status, self.config, self.restart\n\n"
+        "IMPORTANT — Self-Evolution:\n\
+         If the task requires capabilities you do NOT currently have, you MUST create\n\
+         a new plugin tool using `plugin.create` and then call it.\n\
+         Never say 'I don't have the tools' — instead, BUILD the tool you need.\n\n\
+         Steps for self-evolution:\n\
+         1. Call plugin.create with {\"name\": \"tool_name\", \"description\": \"what it does\", \"code\": \"def main(input_data: dict) -> dict: ...\", \"capabilities\": [], \"dependencies\": [\"pip_pkg\"]}\n\
+         2. The code must define a `def main(input_data: dict) -> dict` function\n\
+         3. After creation, call the new plugin.tool_name with the actual task input\n\n"
     );
 
     prompt.push_str(
         "You MUST respond with ONLY a valid JSON object, no other text.\n\
          If you can execute this task using the tools above, respond with:\n\
          {\"reasoning\": \"why you chose these actions\", \"tool_calls\": [{\"tool\": \"tool.name\", \"input\": {\"param\": \"value\"}}], \"result\": \"summary\"}\n\n\
+         If the task needs a NEW tool, create it first then call it:\n\
+         {\"reasoning\": \"Need to build a tool for X\", \"tool_calls\": [{\"tool\": \"plugin.create\", \"input\": {\"name\": \"my_tool\", \"description\": \"Does X\", \"code\": \"def main(input_data):\\n    return {}\", \"capabilities\": [], \"dependencies\": []}}, {\"tool\": \"plugin.my_tool\", \"input\": {}}], \"result\": \"Created and executed new tool\"}\n\n\
          If you need more information from the user before you can act, respond with:\n\
          {\"needs_clarification\": true, \"questions\": [\"What specific thing do you need?\"]}\n\n\
-         If the task cannot be done with available tools and needs no clarification, respond with:\n\
-         {\"reasoning\": \"explanation\", \"tool_calls\": [], \"result\": \"your answer\"}\n\n\
          IMPORTANT: You must output ONLY valid JSON. No markdown, no explanation outside JSON."
     );
 
@@ -357,6 +355,78 @@ async fn execute_ai_task(
         model_used: "heuristic".to_string(),
         tokens_used: 0,
     }
+}
+
+/// Query the live tool catalog from the tools gRPC service.
+/// Groups tools by namespace and formats them for the AI prompt.
+/// Falls back to a static list if the tools service is unreachable.
+async fn query_tool_catalog(clients: &crate::clients::ServiceClients) -> String {
+    match clients.tools().await {
+        Ok(mut client) => {
+            let request = tonic::Request::new(crate::proto::tools::ListToolsRequest {
+                namespace: String::new(),
+            });
+            match client.list_tools(request).await {
+                Ok(response) => {
+                    let tools = response.into_inner().tools;
+                    if tools.is_empty() {
+                        return static_tool_catalog();
+                    }
+
+                    // Group by namespace
+                    let mut by_ns: std::collections::BTreeMap<String, Vec<String>> =
+                        std::collections::BTreeMap::new();
+                    for tool in &tools {
+                        let ns = if tool.namespace.is_empty() {
+                            "other".to_string()
+                        } else {
+                            tool.namespace.clone()
+                        };
+                        let desc = if tool.description.is_empty() {
+                            tool.name.clone()
+                        } else {
+                            format!("{} — {}", tool.name, tool.description)
+                        };
+                        by_ns.entry(ns).or_default().push(desc);
+                    }
+
+                    let mut catalog = format!("Available tools ({} total):\n", tools.len());
+                    for (ns, tool_list) in &by_ns {
+                        catalog.push_str(&format!("[{}] {}\n", ns, tool_list.join(", ")));
+                    }
+                    catalog.push('\n');
+                    catalog
+                }
+                Err(e) => {
+                    debug!("Failed to list tools via gRPC: {e}");
+                    static_tool_catalog()
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Cannot connect to tools service for catalog: {e}");
+            static_tool_catalog()
+        }
+    }
+}
+
+/// Static fallback tool catalog when tools service is unreachable
+fn static_tool_catalog() -> String {
+    "Available tools you can call:\n\
+     - fs.read, fs.write, fs.list, fs.delete, fs.mkdir, fs.copy, fs.move, fs.stat, fs.search\n\
+     - process.list, process.kill, process.spawn, process.info\n\
+     - service.list, service.start, service.stop, service.restart, service.status\n\
+     - net.ping, net.dns, net.interfaces, net.http_get, net.port_scan\n\
+     - firewall.rules, firewall.add_rule, firewall.delete_rule\n\
+     - pkg.install, pkg.remove, pkg.list_installed, pkg.search, pkg.update\n\
+     - sec.check_perms, sec.audit_query\n\
+     - monitor.cpu, monitor.memory, monitor.disk, monitor.network, monitor.logs\n\
+     - web.http_request, web.scrape, web.webhook, web.download, web.api_call\n\
+     - git.init, git.clone, git.add, git.commit, git.push, git.pull, git.branch, git.status, git.log, git.diff\n\
+     - code.scaffold, code.generate\n\
+     - self.inspect, self.health, self.update, self.rebuild\n\
+     - plugin.create, plugin.list, plugin.delete, plugin.install_deps\n\n"
+        .to_string()
 }
 
 /// Try to call the local AI runtime for inference

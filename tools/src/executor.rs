@@ -394,6 +394,24 @@ impl Executor {
             "self.health".into(),
             Box::new(|input| crate::self_update::inspect::execute_health(input)),
         );
+
+        // Plugin tools
+        self.handlers.insert(
+            "plugin.create".into(),
+            Box::new(|input| crate::plugin::create::execute(input)),
+        );
+        self.handlers.insert(
+            "plugin.list".into(),
+            Box::new(|input| crate::plugin::manage::execute_list(input)),
+        );
+        self.handlers.insert(
+            "plugin.delete".into(),
+            Box::new(|input| crate::plugin::manage::execute_delete(input)),
+        );
+        self.handlers.insert(
+            "plugin.install_deps".into(),
+            Box::new(|input| crate::plugin::create::execute_install_deps(input)),
+        );
     }
 
     /// Execute a tool through the full pipeline

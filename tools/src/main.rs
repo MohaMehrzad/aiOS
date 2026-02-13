@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{info, warn};
 
 mod registry;
 mod executor;
@@ -33,6 +33,7 @@ pub mod web;
 pub mod git;
 pub mod code;
 pub mod self_update;
+pub mod plugin;
 
 pub mod proto {
     pub mod common {
@@ -101,7 +102,7 @@ impl ToolRegistry for ToolRegistryService {
 
         // Destructure to avoid simultaneous borrow conflicts
         let ToolRegistryState {
-            ref registry,
+            ref mut registry,
             ref executor,
             ref mut audit_log,
             ref mut backup_manager,
@@ -113,10 +114,66 @@ impl ToolRegistry for ToolRegistryService {
                 registry,
                 audit_log,
                 backup_manager,
-                req,
+                req.clone(),
             )
             .await
             .map_err(|e| tonic::Status::internal(format!("Execution failed: {e}")))?;
+
+        // Plugin execution fallback: if no handler registered and tool is a plugin,
+        // try running the plugin script directly
+        if !response.success
+            && response.error.contains("No handler registered")
+            && req.tool_name.starts_with("plugin.")
+        {
+            let short_name = req.tool_name.strip_prefix("plugin.").unwrap_or(&req.tool_name);
+            let script_path = format!("{}/{}.py", plugin::PLUGIN_DIR, short_name);
+
+            if std::path::Path::new(&script_path).exists() {
+                info!("Falling back to plugin script execution: {}", script_path);
+                let sandbox = sandbox::Sandbox::new(sandbox::ResourceLimits {
+                    allow_network: true,
+                    max_cpu_time: std::time::Duration::from_secs(30),
+                    writable_paths: vec!["/tmp".to_string()],
+                    ..Default::default()
+                });
+
+                match sandbox
+                    .execute("python3", &[&script_path], &req.input_json)
+                    .await
+                {
+                    Ok(result) => {
+                        audit_log.record(
+                            &response.execution_id,
+                            &req.tool_name,
+                            &req.agent_id,
+                            &req.task_id,
+                            &format!("Plugin fallback: {}", req.reason),
+                            result.success,
+                            result.duration_ms as i64,
+                        );
+                        return Ok(tonic::Response::new(
+                            proto::tools::ExecuteResponse {
+                                success: result.success,
+                                output_json: result.output,
+                                error: result.error,
+                                execution_id: response.execution_id,
+                                duration_ms: result.duration_ms as i64,
+                                backup_id: String::new(),
+                            },
+                        ));
+                    }
+                    Err(e) => {
+                        warn!("Plugin script execution failed: {e}");
+                    }
+                }
+            }
+        }
+
+        // After plugin.create succeeds, re-scan plugins to register the new tool
+        if response.success && req.tool_name == "plugin.create" {
+            info!("Plugin created successfully, rescanning plugin directory");
+            plugin::scan_and_register_plugins(registry);
+        }
 
         Ok(tonic::Response::new(response))
     }
@@ -192,6 +249,9 @@ async fn main() -> Result<()> {
     let mut reg = registry::Registry::new();
     register_builtin_tools(&mut reg);
 
+    // Load any previously-created plugins from disk
+    plugin::scan_and_register_plugins(&mut reg);
+
     let state = Arc::new(Mutex::new(ToolRegistryState {
         registry: reg,
         executor: executor::Executor::new(),
@@ -241,6 +301,8 @@ fn register_builtin_tools(reg: &mut registry::Registry) {
     code::register_tools(reg);
     // Self-update tools
     self_update::register_tools(reg);
+    // Plugin meta-tools
+    plugin::register_tools(reg);
 
     info!("Registered {} built-in tools", reg.tool_count());
 }

@@ -42,7 +42,34 @@ impl CapabilityChecker {
             tool_requirements: Vec::new(),
         };
         checker.register_default_requirements();
+        checker.register_default_agents();
         checker
+    }
+
+    /// Register built-in agents with their default capabilities.
+    /// The autonomy-loop agent gets ALL capabilities since it acts on behalf of the AI OS.
+    fn register_default_agents(&mut self) {
+        let all_capabilities: Vec<String> = vec![
+            "fs_read", "fs_write", "fs_delete", "fs_permissions",
+            "process_read", "process_manage",
+            "service_read", "service_manage",
+            "net_read", "net_write", "net_scan",
+            "firewall_read", "firewall_manage",
+            "pkg_read", "pkg_manage",
+            "sec_read",
+            "monitor_read",
+            "hw_read",
+            "git_read", "git_write",
+            "code_gen",
+            "self_read", "self_update",
+            "plugin_read", "plugin_manage", "plugin_execute",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        self.register_agent("autonomy-loop", &all_capabilities);
+        info!("Registered autonomy-loop agent with {} capabilities", all_capabilities.len());
     }
 
     /// Register default tool capability requirements
@@ -126,6 +153,11 @@ impl CapabilityChecker {
             ("self.health", vec!["self_read"], RiskLevel::Low),
             ("self.update", vec!["self_update"], RiskLevel::Critical),
             ("self.rebuild", vec!["self_update"], RiskLevel::Critical),
+            // Plugin management
+            ("plugin.create", vec!["plugin_manage", "fs_write"], RiskLevel::High),
+            ("plugin.list", vec!["plugin_read"], RiskLevel::Low),
+            ("plugin.delete", vec!["plugin_manage"], RiskLevel::High),
+            ("plugin.install_deps", vec!["plugin_manage", "pkg_manage"], RiskLevel::High),
         ];
 
         for (pattern, caps, risk) in requirements {
@@ -160,6 +192,31 @@ impl CapabilityChecker {
         let requirement = match requirement {
             Some(r) => r,
             None => {
+                // For dynamically-created plugin tools, fall back to plugin_execute capability
+                if tool_name.starts_with("plugin.") {
+                    let agent_caps = self.agent_capabilities.get(agent_id);
+                    let has_plugin_execute = agent_caps
+                        .map_or(false, |caps| caps.contains("plugin_execute"));
+                    if has_plugin_execute {
+                        return CapabilityCheckResult {
+                            allowed: true,
+                            reason: "Dynamic plugin tool — agent has plugin_execute capability"
+                                .to_string(),
+                            risk_level: RiskLevel::Medium,
+                            missing_capabilities: vec![],
+                        };
+                    } else {
+                        return CapabilityCheckResult {
+                            allowed: false,
+                            reason: format!(
+                                "Dynamic plugin tool {tool_name} requires plugin_execute capability"
+                            ),
+                            risk_level: RiskLevel::Medium,
+                            missing_capabilities: vec!["plugin_execute".to_string()],
+                        };
+                    }
+                }
+
                 // Unknown tool — deny by default
                 warn!("No capability requirement defined for tool: {tool_name}");
                 return CapabilityCheckResult {
@@ -304,5 +361,49 @@ mod tests {
         );
         let result = checker.check_permission("agent-2", "fs.delete");
         assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_autonomy_loop_has_all_capabilities() {
+        let checker = CapabilityChecker::new();
+        // autonomy-loop should be pre-registered with all capabilities
+        let result = checker.check_permission("autonomy-loop", "fs.read");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "fs.delete");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "pkg.install");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "plugin.create");
+        assert!(result.allowed);
+        let result = checker.check_permission("autonomy-loop", "self.update");
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_plugin_capability_requirements() {
+        let checker = CapabilityChecker::new();
+        assert_eq!(checker.get_risk_level("plugin.create"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("plugin.list"), RiskLevel::Low);
+        assert_eq!(checker.get_risk_level("plugin.delete"), RiskLevel::High);
+        assert_eq!(checker.get_risk_level("plugin.install_deps"), RiskLevel::High);
+    }
+
+    #[test]
+    fn test_dynamic_plugin_fallback() {
+        let mut checker = CapabilityChecker::new();
+        // Agent with plugin_execute can run dynamic plugin tools
+        checker.register_agent("agent-x", &["plugin_execute".to_string()]);
+        let result = checker.check_permission("agent-x", "plugin.my_custom_tool");
+        assert!(result.allowed);
+        assert_eq!(result.risk_level, RiskLevel::Medium);
+    }
+
+    #[test]
+    fn test_dynamic_plugin_denied_without_capability() {
+        let mut checker = CapabilityChecker::new();
+        checker.register_agent("agent-y", &["fs_read".to_string()]);
+        let result = checker.check_permission("agent-y", "plugin.some_tool");
+        assert!(!result.allowed);
+        assert!(result.missing_capabilities.contains(&"plugin_execute".to_string()));
     }
 }
