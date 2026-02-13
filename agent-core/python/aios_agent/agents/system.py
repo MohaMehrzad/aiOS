@@ -408,6 +408,7 @@ class SystemAgent(BaseAgent):
 
             await asyncio.gather(
                 self.heartbeat_loop(),
+                self.task_poll_loop(),
                 self._health_check_loop(),
                 self._shutdown_event.wait(),
             )

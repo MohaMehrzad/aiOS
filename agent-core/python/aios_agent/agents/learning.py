@@ -757,6 +757,7 @@ class LearningAgent(BaseAgent):
             await self.register_with_orchestrator()
             await asyncio.gather(
                 self.heartbeat_loop(),
+                self.task_poll_loop(),
                 self._learning_cycle(),
                 self._shutdown_event.wait(),
             )
