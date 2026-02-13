@@ -303,6 +303,7 @@ impl TaskPlanner {
         description: &str,
     ) -> Result<Vec<Task>> {
         let now = chrono::Utc::now().timestamp();
+        let tools = self.infer_required_tools(description);
         let task = Task {
             id: Uuid::new_v4().to_string(),
             goal_id: goal_id.to_string(),
@@ -310,7 +311,7 @@ impl TaskPlanner {
             assigned_agent: String::new(),
             status: "pending".to_string(),
             intelligence_level: "reactive".to_string(),
-            required_tools: vec![],
+            required_tools: tools,
             depends_on: vec![],
             input_json: vec![],
             output_json: vec![],

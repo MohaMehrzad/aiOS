@@ -771,7 +771,11 @@ fn try_heuristic_execution(task: &crate::proto::common::Task) -> Option<Vec<Tool
     let tools = &task.required_tools;
 
     // ── Email: extract to/subject/body from description ──
-    if tools.iter().any(|t| t == "email") || desc_lower.contains("email.send") {
+    let is_email_task = tools.iter().any(|t| t == "email")
+        || desc_lower.contains("email.send")
+        || ((desc_lower.contains("email") || desc_lower.contains("mail"))
+            && (desc_lower.contains("send") || desc_lower.contains("@")));
+    if is_email_task {
         if let Some(email_input) = extract_email_params(desc) {
             return Some(vec![ToolCallRequest {
                 tool_name: "email.send".to_string(),
