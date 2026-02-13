@@ -341,43 +341,71 @@ impl TaskPlanner {
         let desc_lower = description.to_lowercase();
         let mut tools = vec![];
 
+        // Helper: check if word appears as a standalone word (not part of another word)
+        let has_word = |text: &str, word: &str| -> bool {
+            text.split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|w| w == word)
+        };
+
         if desc_lower.contains("file")
-            || desc_lower.contains("read")
-            || desc_lower.contains("write")
+            || has_word(&desc_lower, "read")
+            || has_word(&desc_lower, "write")
             || desc_lower.contains("directory")
+            || desc_lower.contains("disk")
         {
             tools.push("fs".to_string());
         }
         if desc_lower.contains("process")
-            || desc_lower.contains("kill")
-            || desc_lower.contains("spawn")
+            || has_word(&desc_lower, "kill")
+            || has_word(&desc_lower, "spawn")
         {
             tools.push("process".to_string());
         }
-        if desc_lower.contains("service")
-            || desc_lower.contains("restart")
-            || desc_lower.contains("start")
-            || desc_lower.contains("stop")
+        if has_word(&desc_lower, "service")
+            || has_word(&desc_lower, "restart")
+            || has_word(&desc_lower, "systemctl")
         {
             tools.push("service".to_string());
         }
         if desc_lower.contains("network")
             || desc_lower.contains("firewall")
-            || desc_lower.contains("dns")
+            || has_word(&desc_lower, "dns")
+            || has_word(&desc_lower, "ping")
         {
             tools.push("net".to_string());
         }
-        if desc_lower.contains("install")
-            || desc_lower.contains("package")
-            || desc_lower.contains("update")
+        if has_word(&desc_lower, "install")
+            || has_word(&desc_lower, "package")
+            || has_word(&desc_lower, "apt")
         {
             tools.push("pkg".to_string());
         }
         if desc_lower.contains("security")
             || desc_lower.contains("permission")
-            || desc_lower.contains("audit")
+            || has_word(&desc_lower, "audit")
+            || desc_lower.contains("vulnerab")
         {
             tools.push("sec".to_string());
+        }
+        if desc_lower.contains("plugin")
+            || desc_lower.contains("script")
+            || desc_lower.contains("email")
+            || desc_lower.contains("smtp")
+        {
+            tools.push("plugin".to_string());
+        }
+        if desc_lower.contains("monitor")
+            || has_word(&desc_lower, "cpu")
+            || has_word(&desc_lower, "memory")
+            || desc_lower.contains("metric")
+        {
+            tools.push("monitor".to_string());
+        }
+        if desc_lower.contains("container")
+            || desc_lower.contains("podman")
+            || desc_lower.contains("docker")
+        {
+            tools.push("container".to_string());
         }
 
         tools

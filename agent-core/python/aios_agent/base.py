@@ -621,11 +621,13 @@ class BaseAgent(ABC):
 
     async def register_with_orchestrator(self) -> bool:
         """Register this agent with the orchestrator using typed protobuf."""
+        # Extract unique namespace prefixes from capabilities (e.g. "sec.scan" → "sec")
+        namespaces = sorted({cap.split(".")[0] for cap in self.get_capabilities() if "." in cap})
         request = common_pb2.AgentRegistration(
             agent_id=self.agent_id,
             agent_type=self.get_agent_type(),
             capabilities=self.get_capabilities(),
-            tool_namespaces=[],
+            tool_namespaces=namespaces,
             status="active",
             registered_at=int(time.time()),
         )

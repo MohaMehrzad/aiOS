@@ -95,12 +95,16 @@ impl AgentRouter {
                     return false;
                 }
                 required_tools.iter().any(|tool| {
+                    // Match against tool_namespaces (exact namespace match)
                     agent.registration.tool_namespaces.contains(tool)
+                        // Match against capabilities (namespace prefix match: "sec" matches "sec.scan")
                         || agent
                             .registration
                             .capabilities
                             .iter()
-                            .any(|cap| cap.contains(tool))
+                            .any(|cap| {
+                                cap.split('.').next().map_or(false, |ns| ns == tool.as_str())
+                            })
                 })
             })
             .collect();
