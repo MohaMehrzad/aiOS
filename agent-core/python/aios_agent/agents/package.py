@@ -548,3 +548,9 @@ class PackageAgent(BaseAgent):
             if capture and clean.lower() not in skip_words and clean:
                 packages.append(clean)
         return packages
+
+
+if __name__ == "__main__":
+    import os
+    agent = PackageAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "package-agent"))
+    asyncio.run(agent.run())

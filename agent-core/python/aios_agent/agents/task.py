@@ -390,3 +390,9 @@ class TaskAgent(BaseAgent):
             "plan": plan_result,
             "execution": execution_result,
         }
+
+
+if __name__ == "__main__":
+    import os
+    agent = TaskAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "task-agent"))
+    asyncio.run(agent.run())

@@ -108,6 +108,12 @@ impl HealthChecker {
 
     /// Start the health check background loop
     pub async fn run(checker: Arc<RwLock<Self>>, cancel: CancellationToken) {
+        // Wait for services to initialize (model loading can take 60+ seconds)
+        tokio::select! {
+            _ = cancel.cancelled() => { return; }
+            _ = tokio::time::sleep(Duration::from_secs(60)) => {}
+        }
+        debug!("Health checker startup grace period elapsed, beginning checks");
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {

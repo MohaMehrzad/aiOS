@@ -373,3 +373,10 @@ class WebAgent(BaseAgent):
             )
 
         return result
+
+
+if __name__ == "__main__":
+    import asyncio
+    import os
+    agent = WebAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "web-agent"))
+    asyncio.run(agent.run())

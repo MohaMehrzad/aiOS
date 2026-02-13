@@ -629,3 +629,9 @@ class StorageAgent(BaseAgent):
             await self.unregister_from_orchestrator()
             await self._close_channels()
             self._running = False
+
+
+if __name__ == "__main__":
+    import os
+    agent = StorageAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "storage-agent"))
+    asyncio.run(agent.run())

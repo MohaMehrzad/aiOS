@@ -764,3 +764,9 @@ class LearningAgent(BaseAgent):
             await self.unregister_from_orchestrator()
             await self._close_channels()
             self._running = False
+
+
+if __name__ == "__main__":
+    import os
+    agent = LearningAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "learning-agent"))
+    asyncio.run(agent.run())

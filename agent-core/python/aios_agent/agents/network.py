@@ -625,3 +625,9 @@ class NetworkAgent(BaseAgent):
             await self.unregister_from_orchestrator()
             await self._close_channels()
             self._running = False
+
+
+if __name__ == "__main__":
+    import os
+    agent = NetworkAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "network-agent"))
+    asyncio.run(agent.run())

@@ -416,3 +416,9 @@ class SystemAgent(BaseAgent):
             await self._close_channels()
             self._running = False
             logger.info("SystemAgent %s shut down", self.agent_id)
+
+
+if __name__ == "__main__":
+    import os
+    agent = SystemAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "system-agent"))
+    asyncio.run(agent.run())

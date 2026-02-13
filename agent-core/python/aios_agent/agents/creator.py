@@ -314,3 +314,10 @@ class CreatorAgent(BaseAgent):
         results["name"] = name
 
         return results
+
+
+if __name__ == "__main__":
+    import asyncio
+    import os
+    agent = CreatorAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "creator-agent"))
+    asyncio.run(agent.run())

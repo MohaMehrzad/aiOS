@@ -669,3 +669,9 @@ class SecurityAgent(BaseAgent):
             await self.unregister_from_orchestrator()
             await self._close_channels()
             self._running = False
+
+
+if __name__ == "__main__":
+    import os
+    agent = SecurityAgent(agent_id=os.getenv("AIOS_AGENT_NAME", "security-agent"))
+    asyncio.run(agent.run())

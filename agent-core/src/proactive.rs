@@ -145,7 +145,7 @@ async fn proactive_check(
     let health_statuses = state_r.health_checker.read().await.get_all_status();
     let unhealthy: Vec<_> = health_statuses
         .iter()
-        .filter(|s| !s.healthy && s.consecutive_failures >= 3)
+        .filter(|s| !s.healthy && s.consecutive_failures >= 6)
         .collect();
     if !unhealthy.is_empty() {
         let names: Vec<String> = unhealthy.iter().map(|s| s.name.clone()).collect();
