@@ -73,7 +73,7 @@ class LearningAgent(BaseAgent):
             f"Options: analyze_patterns, optimize_parameters, suggest_improvements, "
             f"tool_effectiveness, performance_analysis. "
             f"Which action? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
         action = decision.strip().lower()
         if "pattern" in action:

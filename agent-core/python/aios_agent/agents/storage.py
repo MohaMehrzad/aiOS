@@ -66,7 +66,7 @@ class StorageAgent(BaseAgent):
             f"Storage task: '{task.get('description', '')}'. "
             f"Options: check_disk_health, create_backup, restore_backup, manage_mounts, "
             f"filesystem_check, capacity_report. Which action? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
         action = decision.strip().lower()
         if "health" in action or "smart" in action or "disk" in action:

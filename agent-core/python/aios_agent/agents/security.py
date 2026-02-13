@@ -70,7 +70,7 @@ class SecurityAgent(BaseAgent):
             f"Options: scan_vulnerabilities, check_integrity, "
             f"audit_logs, intrusion_check, threat_analysis, check_permissions. "
             f"Which action? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
 
         action = decision.strip().lower()

@@ -76,7 +76,7 @@ class MonitoringAgent(BaseAgent):
             f"Options: collect_metrics, generate_report, check_alerts, "
             f"anomaly_detection, resource_forecast, dashboard_data. "
             f"Which action? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
         action = decision.strip().lower()
         if "collect" in action or "metric" in action:

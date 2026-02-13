@@ -71,7 +71,7 @@ class NetworkAgent(BaseAgent):
             f"Options: check_connectivity, dns_lookup, list_interfaces, "
             f"diagnose, manage_firewall, port_scan. "
             f"Which action matches best? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
 
         action = decision.strip().lower()

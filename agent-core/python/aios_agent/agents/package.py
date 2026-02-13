@@ -76,7 +76,7 @@ class PackageAgent(BaseAgent):
             f"Options: install_package, remove_package, update_all, check_vulnerabilities, "
             f"search_packages, package_info, list_installed. "
             f"Which action? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
         action = decision.strip().lower()
         if "install" in action:

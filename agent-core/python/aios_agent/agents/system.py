@@ -69,7 +69,7 @@ class SystemAgent(BaseAgent):
             f"I received a system task: '{task.get('description', '')}'. "
             f"Available actions: check_health, restart_service, get_metrics, list_processes. "
             f"Which action best matches? Reply with ONLY the action name.",
-            level=IntelligenceLevel.REACTIVE,
+            level=IntelligenceLevel.OPERATIONAL,
         )
 
         await self.store_decision(
