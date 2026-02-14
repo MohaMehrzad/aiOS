@@ -74,6 +74,259 @@ struct AiWorkItem {
     clients: Arc<crate::clients::ServiceClients>,
 }
 
+/// Configuration for multi-turn reasoning loops.
+/// Controls how many rounds of observe→think→act the AI gets per task.
+struct ReasoningLoopConfig {
+    /// Maximum reasoning rounds (1 for reactive/operational, 3 tactical, 5 strategic)
+    max_rounds: u32,
+    /// Token budget cap per task
+    max_total_tokens: i32,
+}
+
+/// A single round in a multi-turn reasoning conversation.
+#[allow(dead_code)]
+struct ConversationTurn {
+    round: u32,
+    ai_response: String,
+    tool_calls: Vec<ToolCallRequest>,
+    tool_results: Vec<serde_json::Value>,
+}
+
+/// Run an iterative reasoning loop: observe→think→act.
+///
+/// Instead of giving the AI ONE shot and marking the task done,
+/// this function lets the AI see tool results and decide whether
+/// to call more tools or signal completion.
+async fn run_reasoning_loop(
+    work: &AiWorkItem,
+    config: &ReasoningLoopConfig,
+) -> (AiInferenceResult, ToolExecutionResult) {
+    let mut conversation: Vec<ConversationTurn> = Vec::new();
+    let mut total_tokens_used: i32 = 0;
+    let mut final_result: Option<AiInferenceResult> = None;
+    let mut final_tool_exec = ToolExecutionResult {
+        tool_results: Vec::new(),
+        all_succeeded: true,
+    };
+
+    for round in 0..config.max_rounds {
+        // Build prompt for this round
+        let prompt = build_round_prompt(work, round, &conversation);
+
+        let backend = AiBackend::ApiGateway;
+        info!(
+            "Reasoning round {}/{} for task {} (tokens so far: {})",
+            round + 1,
+            config.max_rounds,
+            work.task_id,
+            total_tokens_used
+        );
+
+        let result = execute_ai_task(
+            &work.clients,
+            &prompt,
+            work.level.as_str(),
+            backend,
+            &work.preferred_provider,
+            &work.messages,
+        )
+        .await;
+
+        total_tokens_used += result.tokens_used;
+
+        // Check if we've exceeded the token budget
+        if total_tokens_used > config.max_total_tokens {
+            info!(
+                "Token budget exceeded ({} > {}) for task {}, stopping",
+                total_tokens_used, config.max_total_tokens, work.task_id
+            );
+            final_result = Some(result);
+            break;
+        }
+
+        // Check if the AI signaled completion via {"done": true}
+        if is_completion_signal(&result.response_text) {
+            info!(
+                "AI signaled completion at round {} for task {}",
+                round + 1,
+                work.task_id
+            );
+            final_result = Some(result);
+            break;
+        }
+
+        // If parsing returned no tool calls but text is non-empty, try correction
+        let mut result = result;
+        if result.tool_calls.is_empty() && !result.response_text.trim().is_empty() && result.success
+        {
+            // Try JSON correction: ask the model to fix its output
+            let corrected = try_json_correction(work, &result.response_text).await;
+            if let Some(corrected_result) = corrected {
+                total_tokens_used += corrected_result.tokens_used;
+                result = corrected_result;
+            }
+        }
+
+        // If still no tool calls and not the first round, stop
+        if result.tool_calls.is_empty() {
+            final_result = Some(result);
+            break;
+        }
+
+        // Execute tool calls
+        let tool_exec =
+            execute_tool_calls_unlocked(&work.clients, &work.task_id, &result).await;
+
+        // Accumulate tool results for the next round
+        let turn = ConversationTurn {
+            round,
+            ai_response: result.response_text.clone(),
+            tool_calls: result.tool_calls.clone(),
+            tool_results: tool_exec.tool_results.clone(),
+        };
+
+        // Merge tool execution results
+        final_tool_exec.all_succeeded = final_tool_exec.all_succeeded && tool_exec.all_succeeded;
+        final_tool_exec
+            .tool_results
+            .extend(tool_exec.tool_results);
+
+        conversation.push(turn);
+
+        // For reactive/operational tasks: stop after 1 round
+        if config.max_rounds == 1 {
+            final_result = Some(result);
+            break;
+        }
+
+        // If some tools failed, stop the loop (don't continue with bad state)
+        if !final_tool_exec.all_succeeded {
+            final_result = Some(result);
+            break;
+        }
+
+        // If this is the last round, use the current result
+        if round == config.max_rounds - 1 {
+            final_result = Some(result);
+        }
+    }
+
+    // Use the last result, or create a failure if none
+    let result = final_result.unwrap_or(AiInferenceResult {
+        success: false,
+        response_text: "Reasoning loop completed without producing a result".to_string(),
+        tool_calls: vec![],
+        model_used: "none".to_string(),
+        tokens_used: total_tokens_used,
+    });
+
+    (result, final_tool_exec)
+}
+
+/// Build the prompt for a given reasoning round.
+///
+/// - Round 0: Original task description (existing format)
+/// - Round 1+: Task description + previous tool results + continuation instructions
+fn build_round_prompt(
+    work: &AiWorkItem,
+    round: u32,
+    conversation: &[ConversationTurn],
+) -> String {
+    if round == 0 || conversation.is_empty() {
+        // First round: just the task description (existing format)
+        return work.task.description.clone();
+    }
+
+    // Subsequent rounds: include task + tool results from previous rounds
+    let mut prompt = format!("Task: {}\n\n", work.task.description);
+    prompt.push_str("Previous tool results:\n");
+
+    for turn in conversation {
+        for tr in &turn.tool_results {
+            let tool_name = tr.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let success = tr.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+            if success {
+                let output = tr.get("output").unwrap_or(&serde_json::Value::Null);
+                // Truncate large outputs to avoid exceeding context
+                let output_str = serde_json::to_string(output).unwrap_or_default();
+                let truncated = if output_str.len() > 1000 {
+                    format!("{}...(truncated)", &output_str[..1000])
+                } else {
+                    output_str
+                };
+                prompt.push_str(&format!("- {tool_name}: {truncated}\n"));
+            } else {
+                let error = tr
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                prompt.push_str(&format!("- {tool_name}: FAILED — {error}\n"));
+            }
+        }
+    }
+
+    prompt.push_str(
+        "\nBased on the results above, decide what to do next:\n\
+         - If more information is needed, call additional tools.\n\
+         - If the task is complete, respond with: {\"done\": true, \"summary\": \"brief summary of what was accomplished\"}\n\
+         - Respond with ONLY valid JSON.\n",
+    );
+
+    prompt
+}
+
+/// Check if the AI response signals task completion.
+fn is_completion_signal(response_text: &str) -> bool {
+    if let Some(parsed) = extract_json_from_text(response_text) {
+        if parsed.get("done").and_then(|v| v.as_bool()) == Some(true) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Try to get the AI to fix its JSON output by sending a correction prompt.
+/// Returns Some(corrected_result) if correction succeeds, None otherwise.
+async fn try_json_correction(
+    work: &AiWorkItem,
+    original_response: &str,
+) -> Option<AiInferenceResult> {
+    let preview: String = original_response.chars().take(300).collect();
+    let correction_prompt = format!(
+        "Your previous response was not valid JSON for tool execution. \
+         Your response was: {preview}\n\n\
+         You MUST respond with ONLY a valid JSON object in this exact format:\n\
+         {{\"tool_calls\": [{{\"tool\": \"namespace.action\", \"input\": {{}}}}]}}\n\n\
+         Or if the task is complete:\n\
+         {{\"done\": true, \"summary\": \"what was accomplished\"}}\n\n\
+         Original task: {}",
+        work.task.description
+    );
+
+    info!(
+        "Attempting JSON correction for task {} (original response was not valid tool JSON)",
+        work.task_id
+    );
+
+    let result = execute_ai_task(
+        &work.clients,
+        &correction_prompt,
+        work.level.as_str(),
+        AiBackend::ApiGateway,
+        &work.preferred_provider,
+        &work.messages,
+    )
+    .await;
+
+    if !result.tool_calls.is_empty() || is_completion_signal(&result.response_text) {
+        info!("JSON correction succeeded for task {}", work.task_id);
+        Some(result)
+    } else {
+        info!("JSON correction also failed for task {}", work.task_id);
+        None
+    }
+}
+
 /// Single tick of the autonomy loop
 async fn autonomy_tick(
     state_arc: &Arc<RwLock<OrchestratorState>>,
@@ -119,24 +372,32 @@ async fn autonomy_tick(
             }
         }
 
-        // 3. Get next unblocked task from task planner
-        let next_task = state.task_planner.next_task().cloned();
-        let task = match next_task {
-            Some(t) => t,
-            None => {
-                // No pending tasks — drop lock and skip to Phase 4 (housekeeping)
-                // so goal completion checks still run.
-                drop(state);
-                run_housekeeping(state_arc).await;
-                return Ok(());
-            }
-        };
+        // 3. Get next unblocked tasks from task planner (batch for parallel dispatch)
+        let max_parallel = _config.max_concurrent_tasks.min(3); // cap parallel AI at 3
+        let next_tasks: Vec<_> = state
+            .task_planner
+            .next_tasks(max_parallel)
+            .into_iter()
+            .cloned()
+            .collect();
+        if next_tasks.is_empty() {
+            // No pending tasks — drop lock and skip to Phase 4 (housekeeping)
+            drop(state);
+            run_housekeeping(state_arc).await;
+            return Ok(());
+        }
+
+        // Use first task for the existing single-task path; remaining tasks
+        // will be dispatched in parallel in Phase 2.
+        let task = next_tasks[0].clone();
+        let remaining_tasks: Vec<_> = next_tasks[1..].to_vec();
 
         let task_id = task.id.clone();
         let goal_id = task.goal_id.clone();
         let level = IntelligenceLevel::from_str(&task.intelligence_level);
 
-        // Mark task as in-progress
+        // Mark the first task as in-progress (remaining tasks are marked
+        // later if we reach the parallel AI dispatch path)
         state.task_planner.mark_in_progress(&task_id);
         state
             .goal_engine
@@ -275,7 +536,7 @@ async fn autonomy_tick(
             return Ok(());
         }
 
-        // No agent matched — prepare AI work item and release the lock
+        // No agent matched — prepare AI work items and release the lock
         let mut preferred_provider = get_preferred_provider(&state, &goal_id);
         let messages = state.goal_engine.get_messages(&goal_id);
         let clients = state.clients.clone(); // Arc clone — cheap
@@ -284,54 +545,143 @@ async fn autonomy_tick(
             preferred_provider = "qwen3".to_string();
         }
 
-        Some(AiWorkItem {
+        let mut ai_work_items = vec![AiWorkItem {
             task,
             task_id,
             goal_id,
             level,
             preferred_provider,
             messages,
-            clients,
-        })
+            clients: clients.clone(),
+        }];
+
+        // Mark remaining tasks as in-progress now that we're on the AI path
+        for extra_task in &remaining_tasks {
+            state.task_planner.mark_in_progress(&extra_task.id);
+            state
+                .goal_engine
+                .update_task_status(&extra_task.goal_id, &extra_task.id, "in_progress");
+        }
+
+        // Prepare work items for remaining parallel tasks
+        for extra_task in remaining_tasks {
+            let extra_level =
+                IntelligenceLevel::from_str(&extra_task.intelligence_level);
+            let mut extra_provider =
+                get_preferred_provider(&state, &extra_task.goal_id);
+            let extra_messages = state.goal_engine.get_messages(&extra_task.goal_id);
+            if extra_provider.is_empty() {
+                extra_provider = "qwen3".to_string();
+            }
+            ai_work_items.push(AiWorkItem {
+                task_id: extra_task.id.clone(),
+                goal_id: extra_task.goal_id.clone(),
+                level: extra_level,
+                preferred_provider: extra_provider,
+                messages: extra_messages,
+                clients: clients.clone(),
+                task: extra_task,
+            });
+        }
+
+        Some(ai_work_items)
     }; // ── Write lock dropped here ──
 
-    // ── Phase 2: AI inference WITHOUT holding the write lock ──
-    if let Some(work) = ai_work {
-        let backend = AiBackend::ApiGateway;
-        info!(
-            "Routing {} task {} to API gateway (provider: {})",
-            work.level.as_str(),
-            work.task_id,
-            work.preferred_provider
-        );
+    // ── Phase 2: Multi-turn reasoning loops WITHOUT holding the write lock ──
+    // Dispatch up to 3 reasoning loops in parallel using a semaphore.
+    if let Some(work_items) = ai_work {
+        if work_items.len() == 1 {
+            // Single task — run inline (no spawn overhead)
+            let work = &work_items[0];
+            let loop_config = ReasoningLoopConfig {
+                max_rounds: match work.level {
+                    IntelligenceLevel::Reactive | IntelligenceLevel::Operational => 1,
+                    IntelligenceLevel::Tactical => 3,
+                    IntelligenceLevel::Strategic => 5,
+                },
+                max_total_tokens: match work.level {
+                    IntelligenceLevel::Reactive | IntelligenceLevel::Operational => 2048,
+                    IntelligenceLevel::Tactical => 8192,
+                    IntelligenceLevel::Strategic => 16384,
+                },
+            };
 
-        let result = execute_ai_task(
-            &work.clients,
-            &work.task.description,
-            work.level.as_str(),
-            backend,
-            &work.preferred_provider,
-            &work.messages,
-        )
-        .await;
+            info!(
+                "Starting reasoning loop for {} task {} (max_rounds={}, provider={})",
+                work.level.as_str(),
+                work.task_id,
+                loop_config.max_rounds,
+                work.preferred_provider
+            );
 
-        // Execute tool calls WITHOUT holding the lock
-        let tool_execution =
-            execute_tool_calls_unlocked(&work.clients, &work.task_id, &result).await;
+            let (result, tool_execution) = run_reasoning_loop(work, &loop_config).await;
 
-        // ── Phase 3: Reacquire write lock to record results ──
-        let mut state = state_arc.write().await;
+            let mut state = state_arc.write().await;
+            record_ai_result(
+                &mut state,
+                &work.task_id,
+                &work.goal_id,
+                &work.task.description,
+                work.level.as_str(),
+                result,
+                tool_execution,
+            )
+            .await;
+        } else {
+            // Multiple tasks — dispatch in parallel with semaphore
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
+            let mut handles = Vec::new();
 
-        record_ai_result(
-            &mut state,
-            &work.task_id,
-            &work.goal_id,
-            &work.task.description,
-            work.level.as_str(),
-            result,
-            tool_execution,
-        )
-        .await;
+            for work in work_items {
+                let sem = semaphore.clone();
+                let state_ref = state_arc.clone();
+                handles.push(tokio::spawn(async move {
+                    let _permit = sem.acquire().await;
+                    let loop_config = ReasoningLoopConfig {
+                        max_rounds: match work.level {
+                            IntelligenceLevel::Reactive | IntelligenceLevel::Operational => 1,
+                            IntelligenceLevel::Tactical => 3,
+                            IntelligenceLevel::Strategic => 5,
+                        },
+                        max_total_tokens: match work.level {
+                            IntelligenceLevel::Reactive | IntelligenceLevel::Operational => 2048,
+                            IntelligenceLevel::Tactical => 8192,
+                            IntelligenceLevel::Strategic => 16384,
+                        },
+                    };
+
+                    info!(
+                        "Parallel reasoning loop for {} task {} (max_rounds={})",
+                        work.level.as_str(),
+                        work.task_id,
+                        loop_config.max_rounds,
+                    );
+
+                    let (result, tool_execution) =
+                        run_reasoning_loop(&work, &loop_config).await;
+
+                    // Reacquire write lock to record results
+                    let mut state = state_ref.write().await;
+                    record_ai_result(
+                        &mut state,
+                        &work.task_id,
+                        &work.goal_id,
+                        &work.task.description,
+                        work.level.as_str(),
+                        result,
+                        tool_execution,
+                    )
+                    .await;
+                }));
+            }
+
+            // Wait for all parallel tasks to complete
+            for handle in handles {
+                if let Err(e) = handle.await {
+                    error!("Parallel reasoning task panicked: {e}");
+                }
+            }
+        }
     }
 
     // ── Phase 4: Housekeeping (dead agent recovery + goal completion) ──
@@ -1336,10 +1686,33 @@ fn parse_clarification(response_text: &str) -> Option<String> {
     None
 }
 
+/// Strip DeepSeek-R1 `<think>...</think>` reasoning tags from model output.
+/// DeepSeek-R1 outputs its chain-of-thought reasoning wrapped in these tags
+/// before producing the actual JSON response.
+fn strip_think_tags(text: &str) -> String {
+    let mut result = text.to_string();
+    // Repeatedly remove all <think>...</think> blocks (may be nested or multiple)
+    while let Some(start) = result.find("<think>") {
+        if let Some(end) = result[start..].find("</think>") {
+            let end_abs = start + end + "</think>".len();
+            result = format!("{}{}", &result[..start], &result[end_abs..]);
+        } else {
+            // Unclosed <think> tag — strip from <think> to end of string
+            result = result[..start].to_string();
+            break;
+        }
+    }
+    result
+}
+
 /// Try to find and extract a JSON object from text that may contain prose around it.
-/// Handles: raw JSON, markdown-fenced JSON, JSON embedded in prose like "Response:\n\n```json\n{...}\n```"
+/// Handles: raw JSON, markdown-fenced JSON, JSON embedded in prose,
+/// and DeepSeek-R1 `<think>...</think>` reasoning tags.
 fn extract_json_from_text(text: &str) -> Option<serde_json::Value> {
-    let trimmed = text.trim();
+    // Strip DeepSeek-R1 <think>...</think> tags before processing.
+    // The model outputs reasoning in these tags followed by the actual JSON response.
+    let trimmed = strip_think_tags(text.trim());
+    let trimmed = trimmed.trim();
 
     // 1. Try direct parse
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
@@ -2248,6 +2621,49 @@ mod tests {
         let calls = parse_tool_calls(response);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].tool_name, "fs.read");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_deepseek_think_tags() {
+        let response = "<think>\nI need to check the CPU usage. Let me call the monitoring tool.\nThe user wants system health info.\n</think>\n{\"tool_calls\": [{\"tool\": \"monitor.cpu\", \"input\": {}}]}";
+        let calls = parse_tool_calls(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool_name, "monitor.cpu");
+    }
+
+    #[test]
+    fn test_strip_think_tags_basic() {
+        let text = "<think>reasoning here</think>{\"key\": \"value\"}";
+        let stripped = strip_think_tags(text);
+        assert_eq!(stripped.trim(), "{\"key\": \"value\"}");
+    }
+
+    #[test]
+    fn test_strip_think_tags_no_tags() {
+        let text = "{\"key\": \"value\"}";
+        let stripped = strip_think_tags(text);
+        assert_eq!(stripped, text);
+    }
+
+    #[test]
+    fn test_strip_think_tags_unclosed() {
+        let text = "<think>reasoning without end tag";
+        let stripped = strip_think_tags(text);
+        assert_eq!(stripped.trim(), "");
+    }
+
+    #[test]
+    fn test_is_completion_signal() {
+        assert!(is_completion_signal(r#"{"done": true, "summary": "all done"}"#));
+        assert!(!is_completion_signal(r#"{"done": false}"#));
+        assert!(!is_completion_signal(r#"{"tool_calls": []}"#));
+        assert!(!is_completion_signal("not json"));
+    }
+
+    #[test]
+    fn test_is_completion_signal_with_think_tags() {
+        let response = "<think>Looks like everything is done.</think>\n{\"done\": true, \"summary\": \"completed\"}";
+        assert!(is_completion_signal(response));
     }
 
     #[test]

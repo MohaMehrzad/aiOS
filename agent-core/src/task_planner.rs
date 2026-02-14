@@ -47,6 +47,10 @@ impl IntelligenceLevel {
 pub struct TaskPlanner {
     pending_tasks: HashMap<String, Task>,
     _task_dependencies: HashMap<String, Vec<String>>,
+    /// Optional gRPC service clients for AI-powered decomposition.
+    /// When present, tactical/strategic goals are decomposed using AI
+    /// instead of keyword heuristics.
+    clients: Option<std::sync::Arc<crate::clients::ServiceClients>>,
 }
 
 impl TaskPlanner {
@@ -54,6 +58,16 @@ impl TaskPlanner {
         Self {
             pending_tasks: HashMap::new(),
             _task_dependencies: HashMap::new(),
+            clients: None,
+        }
+    }
+
+    /// Create a task planner with access to service clients for AI decomposition.
+    pub fn with_clients(clients: std::sync::Arc<crate::clients::ServiceClients>) -> Self {
+        Self {
+            pending_tasks: HashMap::new(),
+            _task_dependencies: HashMap::new(),
+            clients: Some(clients),
         }
     }
 
@@ -97,9 +111,250 @@ impl TaskPlanner {
         Ok(tasks)
     }
 
-    /// AI-powered decomposition for complex goals
-    /// Generates a multi-step task plan based on goal analysis
+    /// AI-powered decomposition for complex goals.
+    /// Tries to use the API gateway (or runtime) to decompose into concrete steps.
+    /// Falls back to keyword heuristics if AI call fails or clients are not available.
     async fn ai_decompose(
+        &mut self,
+        goal_id: &str,
+        description: &str,
+        level: &IntelligenceLevel,
+    ) -> Result<Vec<Task>> {
+        // Try AI-powered decomposition if we have service clients
+        if let Some(ref clients) = self.clients {
+            if let Some(ai_tasks) =
+                self.try_ai_decompose(clients.clone(), goal_id, description, level)
+                    .await
+            {
+                return Ok(ai_tasks);
+            }
+            tracing::info!(
+                "AI decomposition unavailable for goal {goal_id}, falling back to heuristics"
+            );
+        }
+
+        // Fallback: keyword heuristic decomposition
+        self.heuristic_multi_step_decompose(goal_id, description, level)
+            .await
+    }
+
+    /// Attempt to decompose a goal using AI inference.
+    /// Returns None if the AI call fails or returns unparseable results.
+    async fn try_ai_decompose(
+        &self,
+        clients: std::sync::Arc<crate::clients::ServiceClients>,
+        goal_id: &str,
+        description: &str,
+        level: &IntelligenceLevel,
+    ) -> Option<Vec<Task>> {
+        let prompt = format!(
+            "Decompose this goal into 2-5 concrete steps that can be executed with system tools.\n\
+             Goal: {description}\n\n\
+             Available tool namespaces: fs, process, service, net, firewall, pkg, sec, monitor, \
+             web, git, code, plugin, container, email\n\n\
+             Respond with ONLY a JSON array:\n\
+             [{{\"description\": \"step description\", \"tools\": [\"namespace\"]}}]"
+        );
+
+        let system_prompt = "You are aiOS task planner. Decompose goals into executable steps. \
+                             Respond with ONLY valid JSON.";
+
+        // Try API gateway first
+        let result = match clients.api_gateway().await {
+            Ok(mut client) => {
+                let request =
+                    tonic::Request::new(crate::proto::api_gateway::ApiInferRequest {
+                        prompt: prompt.clone(),
+                        system_prompt: system_prompt.to_string(),
+                        max_tokens: 1024,
+                        temperature: 0.3,
+                        preferred_provider: String::new(),
+                        requesting_agent: "task-planner".to_string(),
+                        task_id: String::new(),
+                        allow_fallback: true,
+                    });
+                match client.infer(request).await {
+                    Ok(resp) => Some(resp.into_inner().text),
+                    Err(e) => {
+                        tracing::debug!("API gateway decomposition failed: {e}");
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Cannot connect to API gateway for decomposition: {e}");
+                None
+            }
+        };
+
+        // Try runtime as fallback
+        let result = match result {
+            Some(text) => Some(text),
+            None => match clients.runtime().await {
+                Ok(mut client) => {
+                    let request =
+                        tonic::Request::new(crate::proto::runtime::InferRequest {
+                            model: String::new(),
+                            prompt,
+                            system_prompt: system_prompt.to_string(),
+                            max_tokens: 1024,
+                            temperature: 0.3,
+                            intelligence_level: level.as_str().to_string(),
+                            requesting_agent: "task-planner".to_string(),
+                            task_id: String::new(),
+                        });
+                    match client.infer(request).await {
+                        Ok(resp) => Some(resp.into_inner().text),
+                        Err(e) => {
+                            tracing::debug!("Runtime decomposition failed: {e}");
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Cannot connect to runtime for decomposition: {e}");
+                    None
+                }
+            },
+        };
+
+        let response_text = result?;
+        self.parse_ai_decomposition(&response_text, goal_id, level)
+    }
+
+    /// Parse AI decomposition response into Task objects.
+    fn parse_ai_decomposition(
+        &self,
+        response_text: &str,
+        goal_id: &str,
+        level: &IntelligenceLevel,
+    ) -> Option<Vec<Task>> {
+        let now = chrono::Utc::now().timestamp();
+
+        // Strip <think> tags (DeepSeek-R1 compatibility)
+        let cleaned = response_text.trim();
+        let cleaned = if let Some(start) = cleaned.find('<') {
+            if cleaned[start..].starts_with("<think>") {
+                if let Some(end) = cleaned.find("</think>") {
+                    cleaned[end + "</think>".len()..].trim()
+                } else {
+                    cleaned
+                }
+            } else {
+                cleaned
+            }
+        } else {
+            cleaned
+        };
+
+        // Try to parse JSON array from response
+        let steps: Vec<serde_json::Value> = if let Ok(arr) =
+            serde_json::from_str::<Vec<serde_json::Value>>(cleaned)
+        {
+            arr
+        } else {
+            // Try extracting from markdown fences or embedded JSON
+            let trimmed = cleaned.trim();
+            if let Some(fence_start) = trimmed.find("```") {
+                let after = &trimmed[fence_start + 3..];
+                let json_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
+                let content = &after[json_start..];
+                if let Some(fence_end) = content.find("```") {
+                    if let Ok(arr) =
+                        serde_json::from_str::<Vec<serde_json::Value>>(&content[..fence_end].trim())
+                    {
+                        arr
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            } else if let Some(bracket_start) = trimmed.find('[') {
+                // Find matching bracket
+                let candidate = &trimmed[bracket_start..];
+                if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(candidate) {
+                    arr
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        };
+
+        if steps.is_empty() || steps.len() > 10 {
+            return None;
+        }
+
+        let mut tasks = Vec::new();
+        let mut prev_task_id: Option<String> = None;
+
+        for (i, step) in steps.iter().enumerate() {
+            let desc = step
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if desc.is_empty() {
+                continue;
+            }
+
+            let tools: Vec<String> = step
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let task_id = Uuid::new_v4().to_string();
+            let depends_on = if let Some(ref prev) = prev_task_id {
+                vec![prev.clone()]
+            } else {
+                vec![]
+            };
+
+            tasks.push(Task {
+                id: task_id.clone(),
+                goal_id: goal_id.to_string(),
+                description: desc,
+                assigned_agent: String::new(),
+                status: "pending".to_string(),
+                intelligence_level: if i == 0 {
+                    "operational".to_string()
+                } else {
+                    level.as_str().to_string()
+                },
+                required_tools: tools,
+                depends_on,
+                input_json: vec![],
+                output_json: vec![],
+                created_at: now,
+                started_at: 0,
+                completed_at: 0,
+                error: String::new(),
+            });
+
+            prev_task_id = Some(task_id);
+        }
+
+        if tasks.is_empty() {
+            None
+        } else {
+            tracing::info!(
+                "AI decomposed goal {goal_id} into {} tasks",
+                tasks.len()
+            );
+            Some(tasks)
+        }
+    }
+
+    /// Heuristic multi-step decomposition (the original keyword-based logic).
+    /// Used as fallback when AI decomposition is unavailable.
+    async fn heuristic_multi_step_decompose(
         &mut self,
         goal_id: &str,
         description: &str,
@@ -107,7 +362,6 @@ impl TaskPlanner {
     ) -> Result<Vec<Task>> {
         let now = chrono::Utc::now().timestamp();
 
-        // Analyze the goal to determine sub-tasks
         let subtasks = self.analyze_goal_steps(description);
         let mut tasks = Vec::new();
         let mut prev_task_id: Option<String> = None;
@@ -127,7 +381,6 @@ impl TaskPlanner {
                 assigned_agent: String::new(),
                 status: "pending".to_string(),
                 intelligence_level: if i == 0 {
-                    // First task may be simpler (gather info)
                     "operational".to_string()
                 } else {
                     level.as_str().to_string()
@@ -142,7 +395,6 @@ impl TaskPlanner {
                 error: String::new(),
             });
 
-            // Build dependency chain
             if let Some(prev) = &prev_task_id {
                 self._task_dependencies
                     .entry(task_id.clone())
@@ -152,7 +404,6 @@ impl TaskPlanner {
             prev_task_id = Some(task_id);
         }
 
-        // If analysis produced nothing, fall back to single task
         if tasks.is_empty() {
             return self
                 .single_task_decompose(goal_id, description, level)
@@ -499,6 +750,22 @@ impl TaskPlanner {
                 })
             })
     }
+
+    /// Get up to `max` unblocked pending tasks for parallel dispatch.
+    pub fn next_tasks(&self, max: usize) -> Vec<&Task> {
+        self.pending_tasks
+            .values()
+            .filter(|t| t.status == "pending")
+            .filter(|t| {
+                t.depends_on.iter().all(|dep_id| {
+                    self.pending_tasks
+                        .get(dep_id)
+                        .map_or(true, |dep| dep.status == "completed")
+                })
+            })
+            .take(max)
+            .collect()
+    }
 }
 
 /// Extract a service name from a goal description
@@ -744,6 +1011,35 @@ mod tests {
         assert_eq!(extract_service_name("restart nginx gracefully"), "nginx");
         assert_eq!(extract_service_name("deploy postgres"), "postgres");
         assert_eq!(extract_service_name("restart the app"), "the service");
+    }
+
+    #[test]
+    fn test_parse_ai_decomposition_valid() {
+        let planner = TaskPlanner::new();
+        let json = r#"[{"description": "Check system resources", "tools": ["monitor"]}, {"description": "Install package", "tools": ["pkg"]}]"#;
+        let result = planner.parse_ai_decomposition(json, "goal-1", &IntelligenceLevel::Tactical);
+        assert!(result.is_some());
+        let tasks = result.unwrap();
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].description, "Check system resources");
+        assert!(tasks[0].required_tools.contains(&"monitor".to_string()));
+        assert!(!tasks[1].depends_on.is_empty(), "Second task should depend on first");
+    }
+
+    #[test]
+    fn test_parse_ai_decomposition_with_think_tags() {
+        let planner = TaskPlanner::new();
+        let json = "<think>I need to break this into steps.</think>\n[{\"description\": \"Step 1\", \"tools\": [\"fs\"]}]";
+        let result = planner.parse_ai_decomposition(json, "goal-1", &IntelligenceLevel::Tactical);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ai_decomposition_invalid() {
+        let planner = TaskPlanner::new();
+        let result = planner.parse_ai_decomposition("not json", "goal-1", &IntelligenceLevel::Tactical);
+        assert!(result.is_none());
     }
 
     #[test]

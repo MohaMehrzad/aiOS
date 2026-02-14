@@ -34,6 +34,9 @@ pub struct GatewayState {
     pub claude_client: claude::ClaudeClient,
     pub openai_client: openai::OpenAiClient,
     pub qwen3_client: openai::OpenAiClient,
+    /// Local LLM provider — points to a local llama-server instance (e.g., DeepSeek-R1).
+    /// Always available (no API key needed). Uses a placeholder key for the OpenAI-compatible API.
+    pub local_client: openai::OpenAiClient,
     pub request_router: router::RequestRouter,
     pub budget_manager: budget::BudgetManager,
 }
@@ -67,6 +70,7 @@ impl ApiGateway for ApiGatewayService {
             ref claude_client,
             ref openai_client,
             ref qwen3_client,
+            ref local_client,
             ref mut request_router,
             ref mut budget_manager,
         } = *state;
@@ -78,6 +82,7 @@ impl ApiGateway for ApiGatewayService {
                 claude_client,
                 openai_client,
                 qwen3_client,
+                local_client,
                 budget_manager,
             )
             .await
@@ -107,6 +112,7 @@ impl ApiGateway for ApiGatewayService {
                 &state.claude_client,
                 &state.openai_client,
                 &state.qwen3_client,
+                &state.local_client,
                 &state.budget_manager,
             );
 
@@ -136,6 +142,17 @@ impl ApiGateway for ApiGatewayService {
                 "qwen3" => {
                     state
                         .qwen3_client
+                        .infer(
+                            &req.prompt,
+                            &req.system_prompt,
+                            req.max_tokens,
+                            req.temperature,
+                        )
+                        .await
+                }
+                "local" => {
+                    state
+                        .local_client
                         .infer(
                             &req.prompt,
                             &req.system_prompt,
@@ -212,6 +229,13 @@ async fn main() -> Result<()> {
     // OpenAI config
     let openai_model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5".to_string());
 
+    // Local LLM provider — connects to a local llama-server instance (DeepSeek-R1, etc.)
+    // This is always available (no API key needed) and serves as the final fallback.
+    let local_base_url = std::env::var("LOCAL_LLM_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8082".to_string());
+    let local_model =
+        std::env::var("LOCAL_LLM_MODEL").unwrap_or_else(|_| "local".to_string());
+
     let available: Vec<&str> = [
         if !claude_key.is_empty() {
             Some("claude")
@@ -228,16 +252,14 @@ async fn main() -> Result<()> {
         } else {
             None
         },
+        // Local provider is always available
+        Some("local"),
     ]
     .iter()
     .filter_map(|x| *x)
     .collect();
 
-    if available.is_empty() {
-        tracing::warn!("No API keys configured — API gateway will reject all requests");
-    } else {
-        info!("Available providers: {}", available.join(", "));
-    }
+    info!("Available providers: {}", available.join(", "));
 
     let state = Arc::new(RwLock::new(GatewayState {
         claude_client: claude::ClaudeClient::new(claude_key),
@@ -247,6 +269,12 @@ async fn main() -> Result<()> {
             openai_model,
         ),
         qwen3_client: openai::OpenAiClient::with_config(qwen3_key, qwen3_base_url, qwen3_model),
+        // Local LLM uses a placeholder key — llama-server doesn't require authentication
+        local_client: openai::OpenAiClient::with_config(
+            "local-no-key-needed".to_string(),
+            local_base_url,
+            local_model,
+        ),
         request_router: router::RequestRouter::new(),
         budget_manager: budget::BudgetManager::new(100.0, 50.0),
     }));

@@ -83,12 +83,18 @@ async fn main() -> Result<()> {
 
                         // Choose context length and threads based on model size
                         let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                        let (ctx, threads) = if file_size > 2_000_000_000 {
-                            // Large model (>2GB) — Mistral 7B class
-                            (4096_i32, 6_i32)
+                        let (ctx, threads) = if file_size > 8_000_000_000 {
+                            // Very large model (>8GB) — Qwen3-14B class
+                            (8192_i32, 4_i32)
+                        } else if file_size > 4_000_000_000 {
+                            // Large model (4-8GB) — DeepSeek-R1 8B class
+                            (4096_i32, 4_i32)
+                        } else if file_size > 2_000_000_000 {
+                            // Medium model (2-4GB) — Mistral 7B class
+                            (4096_i32, 3_i32)
                         } else {
-                            // Small model — TinyLlama class
-                            (2048_i32, 4_i32)
+                            // Small model (<2GB) — TinyLlama class
+                            (2048_i32, 2_i32)
                         };
 
                         info!(

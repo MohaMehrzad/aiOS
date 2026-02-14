@@ -37,6 +37,7 @@ impl RequestRouter {
         claude: &ClaudeClient,
         openai: &OpenAiClient,
         qwen3: &OpenAiClient,
+        local: &OpenAiClient,
         budget: &mut BudgetManager,
     ) -> Result<InferenceResponse> {
         // Check cache
@@ -47,19 +48,21 @@ impl RequestRouter {
         }
 
         // Select provider
-        let provider = self.select_provider(request, claude, openai, qwen3, budget);
+        let provider = self.select_provider(request, claude, openai, qwen3, local, budget);
 
-        // Build fallback chain based on what's available
+        // Build fallback chain based on what's available.
+        // "local" is always the final fallback (always available, no API key needed).
         let fallback_order: Vec<&str> = match provider.as_str() {
-            "claude" => vec!["openai", "qwen3"],
-            "openai" => vec!["claude", "qwen3"],
-            "qwen3" => vec!["claude", "openai"],
-            _ => vec![],
+            "claude" => vec!["openai", "qwen3", "local"],
+            "openai" => vec!["claude", "qwen3", "local"],
+            "qwen3" => vec!["claude", "openai", "local"],
+            "local" => vec!["qwen3", "claude", "openai"],
+            _ => vec!["local"],
         };
 
         // Try primary provider
         let response = self
-            .try_provider(&provider, request, claude, openai, qwen3, budget)
+            .try_provider(&provider, request, claude, openai, qwen3, local, budget)
             .await;
 
         let response = match response {
@@ -70,7 +73,7 @@ impl RequestRouter {
                 let mut success = None;
                 for fb in &fallback_order {
                     match self
-                        .try_provider(fb, request, claude, openai, qwen3, budget)
+                        .try_provider(fb, request, claude, openai, qwen3, local, budget)
                         .await
                     {
                         Ok(r) => {
@@ -103,6 +106,7 @@ impl RequestRouter {
         claude: &ClaudeClient,
         openai: &OpenAiClient,
         qwen3: &OpenAiClient,
+        local: &OpenAiClient,
         budget: &mut BudgetManager,
     ) -> Result<InferenceResponse> {
         match provider {
@@ -151,17 +155,34 @@ impl RequestRouter {
                 budget.record_usage("qwen3", r.tokens_used, &r.model_used);
                 Ok(r)
             }
+            "local" => {
+                // Local LLM is always "available" — it uses a placeholder API key.
+                // If the local llama-server is down, the HTTP call will fail and
+                // the fallback chain will try other providers.
+                let r = local
+                    .infer(
+                        &request.prompt,
+                        &request.system_prompt,
+                        request.max_tokens,
+                        request.temperature,
+                    )
+                    .await?;
+                budget.record_usage("local", r.tokens_used, &r.model_used);
+                Ok(r)
+            }
             _ => bail!("Unknown provider: {provider}"),
         }
     }
 
-    /// Select the best provider for a request
+    /// Select the best provider for a request.
+    /// Falls back to "local" if no API keys are configured.
     pub fn select_provider(
         &self,
         request: &ApiInferRequest,
         claude: &ClaudeClient,
         openai: &OpenAiClient,
         qwen3: &OpenAiClient,
+        _local: &OpenAiClient,
         budget: &BudgetManager,
     ) -> String {
         // Prefer explicitly requested provider
@@ -169,7 +190,7 @@ impl RequestRouter {
             return request.preferred_provider.clone();
         }
 
-        // Priority: Claude > OpenAI > Qwen3 (by capability)
+        // Priority: Claude > OpenAI > Qwen3 > Local (by capability)
         if claude.is_available() && !budget.is_provider_budget_exceeded("claude") {
             "claude".to_string()
         } else if openai.is_available() && !budget.is_provider_budget_exceeded("openai") {
@@ -177,7 +198,8 @@ impl RequestRouter {
         } else if qwen3.is_available() && !budget.is_provider_budget_exceeded("qwen3") {
             "qwen3".to_string()
         } else {
-            "none".to_string()
+            // Local LLM is always available as final fallback (no API key needed)
+            "local".to_string()
         }
     }
 
@@ -242,7 +264,7 @@ mod tests {
         }
     }
 
-    fn make_clients() -> (ClaudeClient, OpenAiClient, OpenAiClient) {
+    fn make_clients() -> (ClaudeClient, OpenAiClient, OpenAiClient, OpenAiClient) {
         let claude = ClaudeClient::new("test-claude-key".into());
         let openai = OpenAiClient::with_config(
             "test-openai-key".into(),
@@ -254,17 +276,22 @@ mod tests {
             "https://api.viwoapp.net".into(),
             "qwen3:30b-128k".into(),
         );
-        (claude, openai, qwen3)
+        let local = OpenAiClient::with_config(
+            "local-no-key-needed".into(),
+            "http://127.0.0.1:8082".into(),
+            "local".into(),
+        );
+        (claude, openai, qwen3, local)
     }
 
     #[test]
     fn test_select_provider_preferred_openai() {
         let router = RequestRouter::new();
         let budget = BudgetManager::new(100.0, 50.0);
-        let (claude, openai, qwen3) = make_clients();
+        let (claude, openai, qwen3, local) = make_clients();
         let request = make_request("hello", "openai", false);
 
-        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &local, &budget);
         assert_eq!(provider, "openai");
     }
 
@@ -272,10 +299,10 @@ mod tests {
     fn test_select_provider_preferred_claude() {
         let router = RequestRouter::new();
         let budget = BudgetManager::new(100.0, 50.0);
-        let (claude, openai, qwen3) = make_clients();
+        let (claude, openai, qwen3, local) = make_clients();
         let request = make_request("hello", "claude", false);
 
-        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &local, &budget);
         assert_eq!(provider, "claude");
     }
 
@@ -283,11 +310,26 @@ mod tests {
     fn test_select_provider_preferred_qwen3() {
         let router = RequestRouter::new();
         let budget = BudgetManager::new(100.0, 50.0);
-        let (claude, openai, qwen3) = make_clients();
+        let (claude, openai, qwen3, local) = make_clients();
         let request = make_request("hello", "qwen3", false);
 
-        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &budget);
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &local, &budget);
         assert_eq!(provider, "qwen3");
+    }
+
+    #[test]
+    fn test_select_provider_fallback_to_local() {
+        let router = RequestRouter::new();
+        let budget = BudgetManager::new(100.0, 50.0);
+        // All API clients with empty keys (unavailable)
+        let claude = ClaudeClient::new(String::new());
+        let openai = OpenAiClient::with_config(String::new(), "https://api.openai.com".into(), "gpt-5".into());
+        let qwen3 = OpenAiClient::with_config(String::new(), "https://api.viwoapp.net".into(), "qwen3:30b-128k".into());
+        let local = OpenAiClient::with_config("local-no-key-needed".into(), "http://127.0.0.1:8082".into(), "local".into());
+        let request = make_request("hello", "", false);
+
+        let provider = router.select_provider(&request, &claude, &openai, &qwen3, &local, &budget);
+        assert_eq!(provider, "local", "Should fall back to local when no API keys configured");
     }
 
     #[test]

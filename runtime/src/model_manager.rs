@@ -452,8 +452,13 @@ impl ModelManager {
 
     /// Select a model name based on the requested intelligence level.
     ///
-    /// Returns `None` when the level should be handled outside the local
-    /// runtime (heuristics for "reactive", external API for "strategic").
+    /// Model hierarchy (best reasoning capability per level):
+    /// - `reactive`    → heuristics, no LLM needed
+    /// - `operational` → TinyLlama 1.1B (fast, simple tasks)
+    /// - `tactical`    → DeepSeek-R1 8B (primary), Qwen3-14B (fallback), Mistral 7B (last resort)
+    /// - `strategic`   → Qwen3-14B (primary), DeepSeek-R1 8B (fallback), then API gateway
+    ///
+    /// Returns `None` when the level should be handled outside the local runtime.
     pub fn select_model_for_level(&self, level: &str) -> Option<String> {
         match level {
             "reactive" => {
@@ -461,25 +466,30 @@ impl ModelManager {
                 None
             }
             "operational" => {
-                // Prefer tinyllama, fall back to any loaded model.
-                if self.is_model_ready("tinyllama-1.1b") {
-                    Some("tinyllama-1.1b".to_string())
-                } else {
-                    self.first_ready_model()
-                }
+                // Prefer tinyllama for fast, simple tasks
+                self.first_ready_from(&[
+                    "tinyllama-1.1b",
+                    "DeepSeek-R1-Distill-Qwen-8B",
+                    "mistral-7b",
+                ])
             }
             "tactical" => {
-                if self.is_model_ready("mistral-7b") {
-                    Some("mistral-7b".to_string())
-                } else if self.is_model_ready("tinyllama-1.1b") {
-                    Some("tinyllama-1.1b".to_string())
-                } else {
-                    self.first_ready_model()
-                }
+                // DeepSeek-R1 8B is best reasoning in 8B range
+                self.first_ready_from(&[
+                    "DeepSeek-R1-Distill-Qwen-8B",
+                    "Qwen3-14B",
+                    "mistral-7b",
+                    "tinyllama-1.1b",
+                ])
             }
             "strategic" => {
-                // Should be routed to external API via api-gateway.
-                None
+                // Qwen3-14B for complex reasoning; fall back to DeepSeek-R1,
+                // then return None to route to external API via api-gateway.
+                self.first_ready_from(&[
+                    "Qwen3-14B",
+                    "DeepSeek-R1-Distill-Qwen-8B",
+                    "mistral-7b",
+                ])
             }
             _ => {
                 warn!(
@@ -489,6 +499,22 @@ impl ModelManager {
                 self.first_ready_model()
             }
         }
+    }
+
+    /// Try models in priority order, using partial name matching against loaded
+    /// model names.  Returns the first model that is ready.
+    fn first_ready_from(&self, candidates: &[&str]) -> Option<String> {
+        for candidate in candidates {
+            let candidate_lower = candidate.to_lowercase();
+            for (name, model) in &self.models {
+                if matches!(model.status, ModelState::Ready)
+                    && name.to_lowercase().contains(&candidate_lower)
+                {
+                    return Some(name.clone());
+                }
+            }
+        }
+        None
     }
 
     fn is_model_ready(&self, name: &str) -> bool {
@@ -550,6 +576,72 @@ mod tests {
         assert!(mgr.select_model_for_level("operational").is_none());
         assert!(mgr.select_model_for_level("tactical").is_none());
         assert!(mgr.select_model_for_level("strategic").is_none());
+    }
+
+    #[test]
+    fn test_first_ready_from_partial_match() {
+        let mut mgr = ModelManager::new();
+        // Insert a model with a GGUF-style name
+        mgr.models.insert(
+            "DeepSeek-R1-Distill-Qwen-8B-Q4_K_M".to_string(),
+            ManagedModel {
+                name: "DeepSeek-R1-Distill-Qwen-8B-Q4_K_M".to_string(),
+                path: PathBuf::from("/tmp/test.gguf"),
+                process: None,
+                port: 8082,
+                status: ModelState::Ready,
+                loaded_at: 1000,
+                last_used: 2000,
+                request_count: 0,
+                context_length: 4096,
+                gpu_layers: 0,
+                threads: 4,
+            },
+        );
+        // Partial match should find it
+        let result = mgr.first_ready_from(&["DeepSeek-R1-Distill-Qwen-8B"]);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("DeepSeek-R1"));
+    }
+
+    #[test]
+    fn test_tactical_prefers_deepseek_over_mistral() {
+        let mut mgr = ModelManager::new();
+        mgr.models.insert(
+            "mistral-7b".to_string(),
+            ManagedModel {
+                name: "mistral-7b".to_string(),
+                path: PathBuf::from("/tmp/mistral.gguf"),
+                process: None,
+                port: 8080,
+                status: ModelState::Ready,
+                loaded_at: 1000,
+                last_used: 2000,
+                request_count: 0,
+                context_length: 4096,
+                gpu_layers: 0,
+                threads: 4,
+            },
+        );
+        mgr.models.insert(
+            "DeepSeek-R1-Distill-Qwen-8B-Q4_K_M".to_string(),
+            ManagedModel {
+                name: "DeepSeek-R1-Distill-Qwen-8B-Q4_K_M".to_string(),
+                path: PathBuf::from("/tmp/deepseek.gguf"),
+                process: None,
+                port: 8082,
+                status: ModelState::Ready,
+                loaded_at: 1000,
+                last_used: 2000,
+                request_count: 0,
+                context_length: 4096,
+                gpu_layers: 0,
+                threads: 4,
+            },
+        );
+        let selected = mgr.select_model_for_level("tactical");
+        assert!(selected.is_some());
+        assert!(selected.unwrap().contains("DeepSeek"), "tactical should prefer DeepSeek-R1 over mistral");
     }
 
     #[test]

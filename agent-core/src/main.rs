@@ -618,8 +618,11 @@ async fn main() -> Result<()> {
             goal_engine::GoalEngine::new()
         }
     };
-    // Create task planner and sync persisted tasks from GoalEngine
-    let mut task_plan = task_planner::TaskPlanner::new();
+    // Create shared service clients (used by both task planner and orchestrator state)
+    let shared_clients = Arc::new(clients::ServiceClients::new());
+
+    // Create task planner with AI decomposition support via shared clients
+    let mut task_plan = task_planner::TaskPlanner::with_clients(shared_clients.clone());
     let resumable = goal_eng.get_all_resumable_tasks();
     if !resumable.is_empty() {
         info!("Restoring {} tasks from previous session", resumable.len());
@@ -634,7 +637,7 @@ async fn main() -> Result<()> {
         decision_logger: decision_logger::DecisionLogger::new(),
         started_at: Instant::now(),
         cancel_token: cancel_token.clone(),
-        clients: Arc::new(clients::ServiceClients::new()),
+        clients: shared_clients,
         health_checker: health_checker.clone(),
         cluster: Arc::new(RwLock::new(cluster::ClusterManager::new(
             &std::env::var("AIOS_NODE_ID").unwrap_or_else(|_| "local".to_string()),

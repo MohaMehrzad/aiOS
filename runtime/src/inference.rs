@@ -23,6 +23,15 @@ struct ChatCompletionRequest {
     max_tokens: i32,
     temperature: f32,
     stream: bool,
+    /// Force structured JSON output from llama-server's OpenAI-compatible API.
+    /// This helps local models (especially smaller ones) produce valid JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
+}
+
+#[derive(Debug, Serialize)]
+struct ResponseFormat {
+    r#type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -107,6 +116,9 @@ impl InferenceEngine {
             max_tokens,
             temperature,
             stream: false,
+            response_format: Some(ResponseFormat {
+                r#type: "json_object".to_string(),
+            }),
         };
 
         info!(
@@ -116,7 +128,7 @@ impl InferenceEngine {
             temperature,
             agent = %request.requesting_agent,
             task = %request.task_id,
-            "Sending inference request"
+            "Sending inference request (json_object mode)"
         );
 
         let start = Instant::now();
@@ -204,6 +216,8 @@ impl InferenceEngine {
             max_tokens,
             temperature,
             stream: true,
+            // Streaming mode doesn't use response_format (incompatible with SSE chunks)
+            response_format: None,
         };
 
         info!(
@@ -449,10 +463,30 @@ mod tests {
             max_tokens: 100,
             temperature: 0.5,
             stream: false,
+            response_format: Some(ResponseFormat {
+                r#type: "json_object".to_string(),
+            }),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["stream"], false);
         assert_eq!(json["max_tokens"], 100);
         assert_eq!(json["messages"][0]["role"], "user");
+        assert_eq!(json["response_format"]["type"], "json_object");
+    }
+
+    #[test]
+    fn test_chat_request_no_response_format_when_none() {
+        let req = ChatCompletionRequest {
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "test".to_string(),
+            }],
+            max_tokens: 100,
+            temperature: 0.5,
+            stream: true,
+            response_format: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("response_format").is_none(), "response_format should be omitted when None");
     }
 }
