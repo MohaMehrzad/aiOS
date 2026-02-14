@@ -61,7 +61,10 @@ pub fn detect() -> Result<HardwareInfo> {
         info!("GPU: None detected (CPU-only mode)");
     }
     for dev in &hw.storage_devices {
-        info!("Storage: {} ({} GB, {})", dev.name, dev.size_gb, dev.device_type);
+        info!(
+            "Storage: {} ({} GB, {})",
+            dev.name, dev.size_gb, dev.device_type
+        );
     }
     for iface in &hw.network_interfaces {
         info!(
@@ -111,7 +114,10 @@ fn detect_gpu() -> (bool, String) {
     // Check for NVIDIA GPU via /proc/driver/nvidia or PCI
     if Path::new("/proc/driver/nvidia/version").exists() {
         if let Ok(version) = fs::read_to_string("/proc/driver/nvidia/version") {
-            return (true, format!("NVIDIA ({})", version.lines().next().unwrap_or("unknown")));
+            return (
+                true,
+                format!("NVIDIA ({})", version.lines().next().unwrap_or("unknown")),
+            );
         }
     }
 
@@ -165,10 +171,7 @@ fn detect_storage() -> Vec<StorageDevice> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             // Skip loop, ram, and dm devices
-            if name.starts_with("loop")
-                || name.starts_with("ram")
-                || name.starts_with("dm-")
-            {
+            if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") {
                 continue;
             }
 
@@ -230,10 +233,7 @@ fn detect_network() -> Vec<NetworkInterface> {
                 .to_string();
 
             let carrier_path = entry.path().join("carrier");
-            let has_link = fs::read_to_string(&carrier_path)
-                .unwrap_or_default()
-                .trim()
-                == "1";
+            let has_link = fs::read_to_string(&carrier_path).unwrap_or_default().trim() == "1";
 
             interfaces.push(NetworkInterface {
                 name,

@@ -95,8 +95,8 @@ impl EventBus {
         self.subscriptions
             .values()
             .filter(|sub| {
-                let pattern_match = event.event_type.contains(&sub.event_pattern)
-                    || sub.event_pattern == "*";
+                let pattern_match =
+                    event.event_type.contains(&sub.event_pattern) || sub.event_pattern == "*";
 
                 let severity_match = match (&sub.min_severity, &event.severity) {
                     (EventSeverity::Info, _) => true,

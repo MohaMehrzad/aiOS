@@ -90,11 +90,11 @@ impl FirewallApplicator {
             return Ok(Vec::new());
         }
 
-        let contents = std::fs::read_to_string(&self.config_path)
-            .context("Failed to read firewall config")?;
+        let contents =
+            std::fs::read_to_string(&self.config_path).context("Failed to read firewall config")?;
 
-        let config: FirewallConfig = toml::from_str(&contents)
-            .context("Failed to parse firewall config")?;
+        let config: FirewallConfig =
+            toml::from_str(&contents).context("Failed to parse firewall config")?;
 
         info!(
             "Loaded {} firewall rules (default policy: {})",
@@ -272,7 +272,13 @@ mod tests {
         let mut app = FirewallApplicator::new("/nonexistent");
         app.use_nftables = false;
 
-        let rule = make_rule("allow-ssh", FirewallAction::Accept, Direction::Input, Some("tcp"), Some(22));
+        let rule = make_rule(
+            "allow-ssh",
+            FirewallAction::Accept,
+            Direction::Input,
+            Some("tcp"),
+            Some(22),
+        );
         let cmd = app.rule_to_iptables(&rule);
         assert!(cmd.contains("iptables -A INPUT"));
         assert!(cmd.contains("-p tcp"));
@@ -285,7 +291,13 @@ mod tests {
         let mut app = FirewallApplicator::new("/nonexistent");
         app.use_nftables = true;
 
-        let rule = make_rule("allow-http", FirewallAction::Accept, Direction::Input, Some("tcp"), Some(80));
+        let rule = make_rule(
+            "allow-http",
+            FirewallAction::Accept,
+            Direction::Input,
+            Some("tcp"),
+            Some(80),
+        );
         let cmd = app.rule_to_nftables(&rule);
         assert!(cmd.contains("nft add rule"));
         assert!(cmd.contains("input"));
@@ -321,7 +333,13 @@ mod tests {
         let mut app = FirewallApplicator::new("/nonexistent");
         app.use_nftables = false;
 
-        let rule = make_rule("allow-ssh", FirewallAction::Accept, Direction::Input, Some("tcp"), Some(22));
+        let rule = make_rule(
+            "allow-ssh",
+            FirewallAction::Accept,
+            Direction::Input,
+            Some("tcp"),
+            Some(22),
+        );
         app.record_applied(rule);
         assert_eq!(app.applied_count(), 1);
 

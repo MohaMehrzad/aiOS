@@ -35,7 +35,9 @@ fn generate_embedding(text: &str) -> Vec<f32> {
 
     for (word, count) in &word_counts {
         // Simple hash-based projection
-        let hash = word.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let hash = word
+            .bytes()
+            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
         let idx = (hash % dim as u64) as usize;
         vec[idx] += *count as f32;
         // Also fill a second bin for better distribution
@@ -70,10 +72,7 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 
 /// Serialize embedding to bytes
 fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 /// Deserialize embedding from bytes
@@ -115,7 +114,10 @@ impl KnowledgeBase {
 
     /// Add a knowledge entry with automatic embedding generation
     pub fn add_entry(&mut self, entry: &KnowledgeEntry) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let tags = entry.tags.join(",");
         let now = chrono::Utc::now().timestamp();
 
@@ -134,7 +136,10 @@ impl KnowledgeBase {
 
     /// Hybrid search: combines keyword relevance with vector similarity
     pub fn search(&self, query: &str, n_results: i32) -> Result<Vec<SearchResult>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let limit = if n_results <= 0 { 10 } else { n_results };
         let keywords: Vec<&str> = query.split_whitespace().collect();
         let query_embedding = generate_embedding(query);
@@ -188,7 +193,11 @@ impl KnowledgeBase {
             }
         }
 
-        results.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit as usize);
 
         Ok(results)

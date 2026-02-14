@@ -31,7 +31,9 @@ fn generate_embedding(text: &str) -> Vec<f32> {
     }
 
     for (word, count) in &word_counts {
-        let hash = word.bytes().fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let hash = word
+            .bytes()
+            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
         let idx = (hash % dim as u64) as usize;
         vec[idx] += *count as f32;
         let idx2 = ((hash >> 16) % dim as u64) as usize;
@@ -139,7 +141,10 @@ impl LongTermMemory {
         n_results: i32,
         min_relevance: f64,
     ) -> Result<Vec<SearchResult>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let mut results = Vec::new();
         let limit = if n_results <= 0 { 10 } else { n_results };
         let keywords: Vec<&str> = query.split_whitespace().collect();
@@ -248,14 +253,21 @@ impl LongTermMemory {
         }
 
         // Sort by relevance
-        results.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit as usize);
 
         Ok(results)
     }
 
     pub fn store_procedure(&self, procedure: &Procedure) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let tags = procedure.tags.join(",");
 
         // Generate embedding from name + description + tags
@@ -284,7 +296,10 @@ impl LongTermMemory {
     }
 
     pub fn store_incident(&self, incident: &Incident) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO incidents (id, description, symptoms_json, root_cause, resolution, resolved_by, prevention, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -303,7 +318,10 @@ impl LongTermMemory {
     }
 
     pub fn store_config_change(&self, change: &ConfigChange) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT INTO config_changes (id, file_path, content, changed_by, reason, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -527,9 +545,7 @@ mod tests {
     fn test_search_default_limit() {
         let lt = LongTermMemory::new(":memory:").unwrap();
         // n_results=0 should default to 10
-        let results = lt
-            .semantic_search("anything", &[], 0, 0.0)
-            .unwrap();
+        let results = lt.semantic_search("anything", &[], 0, 0.0).unwrap();
         // No data, just verifying it doesn't panic with limit=0
         assert!(results.is_empty());
     }

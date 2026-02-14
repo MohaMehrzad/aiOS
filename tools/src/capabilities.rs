@@ -50,20 +50,35 @@ impl CapabilityChecker {
     /// The autonomy-loop agent gets ALL capabilities since it acts on behalf of the AI OS.
     fn register_default_agents(&mut self) {
         let all_capabilities: Vec<String> = vec![
-            "fs_read", "fs_write", "fs_delete", "fs_permissions",
-            "process_read", "process_manage",
-            "service_read", "service_manage",
-            "net_read", "net_write", "net_scan",
-            "firewall_read", "firewall_manage",
-            "pkg_read", "pkg_manage",
-            "sec_read", "sec_manage",
+            "fs_read",
+            "fs_write",
+            "fs_delete",
+            "fs_permissions",
+            "process_read",
+            "process_manage",
+            "service_read",
+            "service_manage",
+            "net_read",
+            "net_write",
+            "net_scan",
+            "firewall_read",
+            "firewall_manage",
+            "pkg_read",
+            "pkg_manage",
+            "sec_read",
+            "sec_manage",
             "monitor_read",
             "hw_read",
-            "git_read", "git_write",
+            "git_read",
+            "git_write",
             "code_gen",
-            "self_read", "self_update",
-            "plugin_read", "plugin_manage", "plugin_execute",
-            "container_read", "container_manage",
+            "self_read",
+            "self_update",
+            "plugin_read",
+            "plugin_manage",
+            "plugin_execute",
+            "container_read",
+            "container_manage",
             "email_send",
         ]
         .into_iter()
@@ -71,58 +86,104 @@ impl CapabilityChecker {
         .collect();
 
         self.register_agent("autonomy-loop", &all_capabilities);
-        info!("Registered autonomy-loop agent with {} capabilities", all_capabilities.len());
+        info!(
+            "Registered autonomy-loop agent with {} capabilities",
+            all_capabilities.len()
+        );
 
         // Register Python agents with their required capabilities
         let system_caps: Vec<String> = vec![
-            "monitor_read", "service_read", "service_manage", "process_read",
-        ].into_iter().map(String::from).collect();
+            "monitor_read",
+            "service_read",
+            "service_manage",
+            "process_read",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         self.register_agent("system-agent", &system_caps);
 
         let network_caps: Vec<String> = vec![
-            "net_read", "net_write", "net_scan", "firewall_read", "firewall_manage",
-        ].into_iter().map(String::from).collect();
+            "net_read",
+            "net_write",
+            "net_scan",
+            "firewall_read",
+            "firewall_manage",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         self.register_agent("network-agent", &network_caps);
 
         let security_caps: Vec<String> = vec![
-            "sec_read", "sec_manage", "net_read", "net_scan",
-            "process_read", "monitor_read", "fs_read",
-        ].into_iter().map(String::from).collect();
+            "sec_read",
+            "sec_manage",
+            "net_read",
+            "net_scan",
+            "process_read",
+            "monitor_read",
+            "fs_read",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         self.register_agent("security-agent", &security_caps);
 
-        let monitoring_caps: Vec<String> = vec![
-            "monitor_read", "net_read", "process_read", "fs_read",
-        ].into_iter().map(String::from).collect();
+        let monitoring_caps: Vec<String> =
+            vec!["monitor_read", "net_read", "process_read", "fs_read"]
+                .into_iter()
+                .map(String::from)
+                .collect();
         self.register_agent("monitoring-agent", &monitoring_caps);
 
         let storage_caps: Vec<String> = vec![
-            "fs_read", "fs_write", "fs_delete", "fs_permissions",
-            "monitor_read", "process_manage",
-        ].into_iter().map(String::from).collect();
+            "fs_read",
+            "fs_write",
+            "fs_delete",
+            "fs_permissions",
+            "monitor_read",
+            "process_manage",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         self.register_agent("storage-agent", &storage_caps);
 
-        let package_caps: Vec<String> = vec![
-            "pkg_read", "pkg_manage",
-        ].into_iter().map(String::from).collect();
+        let package_caps: Vec<String> = vec!["pkg_read", "pkg_manage"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         self.register_agent("package-agent", &package_caps);
 
-        let learning_caps: Vec<String> = vec![
-            "monitor_read", "process_read", "fs_read",
-        ].into_iter().map(String::from).collect();
+        let learning_caps: Vec<String> = vec!["monitor_read", "process_read", "fs_read"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         self.register_agent("learning-agent", &learning_caps);
 
         let task_caps: Vec<String> = all_capabilities.clone();
         self.register_agent("task-agent", &task_caps);
 
         let creator_caps: Vec<String> = vec![
-            "fs_read", "fs_write", "code_gen", "git_read", "git_write",
-            "process_manage", "plugin_read", "plugin_manage", "plugin_execute",
-        ].into_iter().map(String::from).collect();
+            "fs_read",
+            "fs_write",
+            "code_gen",
+            "git_read",
+            "git_write",
+            "process_manage",
+            "plugin_read",
+            "plugin_manage",
+            "plugin_execute",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
         self.register_agent("creator-agent", &creator_caps);
 
-        let web_caps: Vec<String> = vec![
-            "net_read", "net_write", "fs_read", "fs_write",
-        ].into_iter().map(String::from).collect();
+        let web_caps: Vec<String> = vec!["net_read", "net_write", "fs_read", "fs_write"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         self.register_agent("web-agent", &web_caps);
 
         info!("Registered 10 default agents with capabilities");
@@ -143,8 +204,16 @@ impl CapabilityChecker {
             ("fs.move", vec!["fs_write"], RiskLevel::Medium),
             ("fs.symlink", vec!["fs_write"], RiskLevel::Medium),
             ("fs.delete", vec!["fs_write", "fs_delete"], RiskLevel::High),
-            ("fs.chmod", vec!["fs_write", "fs_permissions"], RiskLevel::High),
-            ("fs.chown", vec!["fs_write", "fs_permissions"], RiskLevel::High),
+            (
+                "fs.chmod",
+                vec!["fs_write", "fs_permissions"],
+                RiskLevel::High,
+            ),
+            (
+                "fs.chown",
+                vec!["fs_write", "fs_permissions"],
+                RiskLevel::High,
+            ),
             // Process management
             ("process.list", vec!["process_read"], RiskLevel::Low),
             ("process.info", vec!["process_read"], RiskLevel::Low),
@@ -162,11 +231,23 @@ impl CapabilityChecker {
             ("net.ping", vec!["net_read"], RiskLevel::Low),
             ("net.dns", vec!["net_read"], RiskLevel::Low),
             ("net.http_get", vec!["net_read"], RiskLevel::Low),
-            ("net.port_scan", vec!["net_read", "net_scan"], RiskLevel::Medium),
+            (
+                "net.port_scan",
+                vec!["net_read", "net_scan"],
+                RiskLevel::Medium,
+            ),
             // Firewall
             ("firewall.rules", vec!["firewall_read"], RiskLevel::Low),
-            ("firewall.add_rule", vec!["firewall_manage"], RiskLevel::Critical),
-            ("firewall.delete_rule", vec!["firewall_manage"], RiskLevel::Critical),
+            (
+                "firewall.add_rule",
+                vec!["firewall_manage"],
+                RiskLevel::Critical,
+            ),
+            (
+                "firewall.delete_rule",
+                vec!["firewall_manage"],
+                RiskLevel::Critical,
+            ),
             // Package management
             ("pkg.list_installed", vec!["pkg_read"], RiskLevel::Low),
             ("pkg.search", vec!["pkg_read"], RiskLevel::Low),
@@ -190,19 +271,39 @@ impl CapabilityChecker {
             ("monitor.disk", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.network", vec!["monitor_read"], RiskLevel::Low),
             ("monitor.logs", vec!["monitor_read"], RiskLevel::Low),
-            ("monitor.ebpf_trace", vec!["monitor_read"], RiskLevel::Medium),
+            (
+                "monitor.ebpf_trace",
+                vec!["monitor_read"],
+                RiskLevel::Medium,
+            ),
             ("monitor.fs_watch", vec!["monitor_read"], RiskLevel::Low),
             // Hardware
             ("hw.info", vec!["hw_read"], RiskLevel::Low),
             // Web connectivity
-            ("web.http_request", vec!["net_read", "net_write"], RiskLevel::Medium),
+            (
+                "web.http_request",
+                vec!["net_read", "net_write"],
+                RiskLevel::Medium,
+            ),
             ("web.scrape", vec!["net_read"], RiskLevel::Low),
             ("web.webhook", vec!["net_write"], RiskLevel::Medium),
-            ("web.download", vec!["net_read", "fs_write"], RiskLevel::Medium),
-            ("web.api_call", vec!["net_read", "net_write"], RiskLevel::Medium),
+            (
+                "web.download",
+                vec!["net_read", "fs_write"],
+                RiskLevel::Medium,
+            ),
+            (
+                "web.api_call",
+                vec!["net_read", "net_write"],
+                RiskLevel::Medium,
+            ),
             // Git operations
             ("git.init", vec!["git_write"], RiskLevel::Low),
-            ("git.clone", vec!["git_write", "net_read"], RiskLevel::Medium),
+            (
+                "git.clone",
+                vec!["git_write", "net_read"],
+                RiskLevel::Medium,
+            ),
             ("git.add", vec!["git_write"], RiskLevel::Low),
             ("git.commit", vec!["git_write"], RiskLevel::Low),
             ("git.push", vec!["git_write", "net_write"], RiskLevel::High),
@@ -212,7 +313,11 @@ impl CapabilityChecker {
             ("git.log", vec!["git_read"], RiskLevel::Low),
             ("git.diff", vec!["git_read"], RiskLevel::Low),
             // Code generation
-            ("code.scaffold", vec!["fs_write", "code_gen"], RiskLevel::Medium),
+            (
+                "code.scaffold",
+                vec!["fs_write", "code_gen"],
+                RiskLevel::Medium,
+            ),
             ("code.generate", vec!["code_gen"], RiskLevel::Medium),
             // Self-update
             ("self.inspect", vec!["self_read"], RiskLevel::Low),
@@ -222,20 +327,44 @@ impl CapabilityChecker {
             // Process (cgroup)
             ("process.cgroup", vec!["process_manage"], RiskLevel::High),
             // Container tools
-            ("container.create", vec!["container_manage"], RiskLevel::High),
-            ("container.start", vec!["container_manage"], RiskLevel::Medium),
-            ("container.stop", vec!["container_manage"], RiskLevel::Medium),
+            (
+                "container.create",
+                vec!["container_manage"],
+                RiskLevel::High,
+            ),
+            (
+                "container.start",
+                vec!["container_manage"],
+                RiskLevel::Medium,
+            ),
+            (
+                "container.stop",
+                vec!["container_manage"],
+                RiskLevel::Medium,
+            ),
             ("container.list", vec!["container_read"], RiskLevel::Low),
             ("container.exec", vec!["container_manage"], RiskLevel::High),
             ("container.logs", vec!["container_read"], RiskLevel::Low),
             // Email
             ("email.send", vec!["email_send"], RiskLevel::Medium),
             // Plugin management
-            ("plugin.create", vec!["plugin_manage", "fs_write"], RiskLevel::High),
+            (
+                "plugin.create",
+                vec!["plugin_manage", "fs_write"],
+                RiskLevel::High,
+            ),
             ("plugin.list", vec!["plugin_read"], RiskLevel::Low),
             ("plugin.delete", vec!["plugin_manage"], RiskLevel::High),
-            ("plugin.install_deps", vec!["plugin_manage", "pkg_manage"], RiskLevel::High),
-            ("plugin.from_template", vec!["plugin_manage", "fs_write"], RiskLevel::Medium),
+            (
+                "plugin.install_deps",
+                vec!["plugin_manage", "pkg_manage"],
+                RiskLevel::High,
+            ),
+            (
+                "plugin.from_template",
+                vec!["plugin_manage", "fs_write"],
+                RiskLevel::Medium,
+            ),
         ];
 
         for (pattern, caps, risk) in requirements {
@@ -253,10 +382,8 @@ impl CapabilityChecker {
             "Registering capabilities for agent {}: {:?}",
             agent_id, capabilities
         );
-        self.agent_capabilities.insert(
-            agent_id.to_string(),
-            capabilities.iter().cloned().collect(),
-        );
+        self.agent_capabilities
+            .insert(agent_id.to_string(), capabilities.iter().cloned().collect());
     }
 
     /// Check if an agent has permission to execute a tool
@@ -273,8 +400,8 @@ impl CapabilityChecker {
                 // For dynamically-created plugin tools, fall back to plugin_execute capability
                 if tool_name.starts_with("plugin.") {
                     let agent_caps = self.agent_capabilities.get(agent_id);
-                    let has_plugin_execute = agent_caps
-                        .map_or(false, |caps| caps.contains("plugin_execute"));
+                    let has_plugin_execute =
+                        agent_caps.map_or(false, |caps| caps.contains("plugin_execute"));
                     if has_plugin_execute {
                         return CapabilityCheckResult {
                             allowed: true,
@@ -338,10 +465,7 @@ impl CapabilityChecker {
         } else {
             CapabilityCheckResult {
                 allowed: false,
-                reason: format!(
-                    "Agent {} missing capabilities: {:?}",
-                    agent_id, missing
-                ),
+                reason: format!("Agent {} missing capabilities: {:?}", agent_id, missing),
                 risk_level: requirement.risk_level.clone(),
                 missing_capabilities: missing,
             }
@@ -394,7 +518,9 @@ mod tests {
 
         let result = checker.check_permission("agent-1", "fs.write");
         assert!(!result.allowed);
-        assert!(result.missing_capabilities.contains(&"fs_write".to_string()));
+        assert!(result
+            .missing_capabilities
+            .contains(&"fs_write".to_string()));
     }
 
     #[test]
@@ -418,7 +544,10 @@ mod tests {
         let checker = CapabilityChecker::new();
         assert_eq!(checker.get_risk_level("fs.read"), RiskLevel::Low);
         assert_eq!(checker.get_risk_level("fs.delete"), RiskLevel::High);
-        assert_eq!(checker.get_risk_level("firewall.add_rule"), RiskLevel::Critical);
+        assert_eq!(
+            checker.get_risk_level("firewall.add_rule"),
+            RiskLevel::Critical
+        );
         assert_eq!(checker.get_risk_level("unknown"), RiskLevel::Critical);
     }
 
@@ -430,7 +559,9 @@ mod tests {
 
         let result = checker.check_permission("agent-1", "fs.delete");
         assert!(!result.allowed);
-        assert!(result.missing_capabilities.contains(&"fs_delete".to_string()));
+        assert!(result
+            .missing_capabilities
+            .contains(&"fs_delete".to_string()));
 
         // Now register with both
         checker.register_agent(
@@ -463,7 +594,10 @@ mod tests {
         assert_eq!(checker.get_risk_level("plugin.create"), RiskLevel::High);
         assert_eq!(checker.get_risk_level("plugin.list"), RiskLevel::Low);
         assert_eq!(checker.get_risk_level("plugin.delete"), RiskLevel::High);
-        assert_eq!(checker.get_risk_level("plugin.install_deps"), RiskLevel::High);
+        assert_eq!(
+            checker.get_risk_level("plugin.install_deps"),
+            RiskLevel::High
+        );
     }
 
     #[test]
@@ -482,7 +616,9 @@ mod tests {
         checker.register_agent("agent-y", &["fs_read".to_string()]);
         let result = checker.check_permission("agent-y", "plugin.some_tool");
         assert!(!result.allowed);
-        assert!(result.missing_capabilities.contains(&"plugin_execute".to_string()));
+        assert!(result
+            .missing_capabilities
+            .contains(&"plugin_execute".to_string()));
     }
 
     #[test]
@@ -493,9 +629,15 @@ mod tests {
         assert_eq!(checker.get_risk_level("sec.audit"), RiskLevel::Low);
         assert_eq!(checker.get_risk_level("sec.scan"), RiskLevel::Medium);
         assert_eq!(checker.get_risk_level("sec.cert_generate"), RiskLevel::High);
-        assert_eq!(checker.get_risk_level("sec.cert_rotate"), RiskLevel::Critical);
+        assert_eq!(
+            checker.get_risk_level("sec.cert_rotate"),
+            RiskLevel::Critical
+        );
         assert_eq!(checker.get_risk_level("sec.file_integrity"), RiskLevel::Low);
-        assert_eq!(checker.get_risk_level("sec.scan_rootkits"), RiskLevel::Medium);
+        assert_eq!(
+            checker.get_risk_level("sec.scan_rootkits"),
+            RiskLevel::Medium
+        );
     }
 
     #[test]
@@ -512,10 +654,16 @@ mod tests {
     #[test]
     fn test_new_monitor_and_process_tools_registered() {
         let checker = CapabilityChecker::new();
-        assert_eq!(checker.get_risk_level("monitor.ebpf_trace"), RiskLevel::Medium);
+        assert_eq!(
+            checker.get_risk_level("monitor.ebpf_trace"),
+            RiskLevel::Medium
+        );
         assert_eq!(checker.get_risk_level("monitor.fs_watch"), RiskLevel::Low);
         assert_eq!(checker.get_risk_level("process.cgroup"), RiskLevel::High);
-        assert_eq!(checker.get_risk_level("plugin.from_template"), RiskLevel::Medium);
+        assert_eq!(
+            checker.get_risk_level("plugin.from_template"),
+            RiskLevel::Medium
+        );
     }
 
     #[test]

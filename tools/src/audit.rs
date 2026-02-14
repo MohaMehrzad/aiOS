@@ -178,7 +178,15 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let mut log = AuditLog::new(tmp.path().to_str().unwrap()).unwrap();
 
-        log.record("exec-1", "fs.read", "agent-1", "task-1", "test read", true, 25);
+        log.record(
+            "exec-1",
+            "fs.read",
+            "agent-1",
+            "task-1",
+            "test read",
+            true,
+            25,
+        );
         assert!(log.verify_chain().unwrap());
     }
 
@@ -237,7 +245,15 @@ mod tests {
         // Reopen and continue the chain
         {
             let mut log = AuditLog::new(&path).unwrap();
-            log.record("exec-3", "fs.delete", "agent-2", "task-2", "cleanup", true, 30);
+            log.record(
+                "exec-3",
+                "fs.delete",
+                "agent-2",
+                "task-2",
+                "cleanup",
+                true,
+                30,
+            );
             assert!(log.verify_chain().unwrap());
         }
     }
@@ -268,9 +284,33 @@ mod tests {
         let tmp = NamedTempFile::new().unwrap();
         let mut log = AuditLog::new(tmp.path().to_str().unwrap()).unwrap();
 
-        log.record("exec-1", "fs.read", "sys-agent", "task-1", "system read", true, 50);
-        log.record("exec-2", "net.ping", "net-agent", "task-2", "network check", true, 100);
-        log.record("exec-3", "sec.audit", "sec-agent", "task-3", "security scan", true, 500);
+        log.record(
+            "exec-1",
+            "fs.read",
+            "sys-agent",
+            "task-1",
+            "system read",
+            true,
+            50,
+        );
+        log.record(
+            "exec-2",
+            "net.ping",
+            "net-agent",
+            "task-2",
+            "network check",
+            true,
+            100,
+        );
+        log.record(
+            "exec-3",
+            "sec.audit",
+            "sec-agent",
+            "task-3",
+            "security scan",
+            true,
+            500,
+        );
 
         assert!(log.verify_chain().unwrap());
     }

@@ -135,9 +135,7 @@ impl InferenceEngine {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<unreadable>".to_string());
-            bail!(
-                "llama-server returned HTTP {status} on port {port}: {body_text}"
-            );
+            bail!("llama-server returned HTTP {status} on port {port}: {body_text}");
         }
 
         let completion: ChatCompletionResponse = resp
@@ -234,9 +232,7 @@ impl InferenceEngine {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<unreadable>".to_string());
-            bail!(
-                "llama-server returned HTTP {status} on port {port} (stream): {body_text}"
-            );
+            bail!("llama-server returned HTTP {status} on port {port} (stream): {body_text}");
         }
 
         let (tx, rx) = mpsc::channel::<Result<InferChunk, tonic::Status>>(128);
@@ -433,10 +429,7 @@ mod tests {
             }]
         }"#;
         let resp: ChatCompletionResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            resp.choices[0].finish_reason.as_deref(),
-            Some("stop")
-        );
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
     }
 
     #[test]

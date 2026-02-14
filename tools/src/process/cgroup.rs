@@ -34,8 +34,7 @@ struct CgroupOutput {
 }
 
 pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
-    let req: CgroupInput =
-        serde_json::from_slice(input).context("Invalid process.cgroup input")?;
+    let req: CgroupInput = serde_json::from_slice(input).context("Invalid process.cgroup input")?;
 
     let cgroup_base = "/sys/fs/cgroup";
     let group_path = if req.group_name.is_empty() {
@@ -142,22 +141,13 @@ fn status_cgroup(path: &str) -> Vec<u8> {
 
     if exists {
         if let Ok(content) = std::fs::read_to_string(format!("{path}/cpu.weight")) {
-            details.insert(
-                "cpu_weight".into(),
-                serde_json::json!(content.trim()),
-            );
+            details.insert("cpu_weight".into(), serde_json::json!(content.trim()));
         }
         if let Ok(content) = std::fs::read_to_string(format!("{path}/memory.max")) {
-            details.insert(
-                "memory_max".into(),
-                serde_json::json!(content.trim()),
-            );
+            details.insert("memory_max".into(), serde_json::json!(content.trim()));
         }
         if let Ok(content) = std::fs::read_to_string(format!("{path}/memory.current")) {
-            details.insert(
-                "memory_current".into(),
-                serde_json::json!(content.trim()),
-            );
+            details.insert("memory_current".into(), serde_json::json!(content.trim()));
         }
         if let Ok(content) = std::fs::read_to_string(format!("{path}/cgroup.procs")) {
             let pids: Vec<&str> = content.lines().collect();

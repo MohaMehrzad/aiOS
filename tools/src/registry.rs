@@ -57,7 +57,16 @@ mod tests {
     use super::*;
 
     fn sample_tool(name: &str, namespace: &str) -> ToolDefinition {
-        make_tool(name, namespace, "A test tool", vec![], "low", true, false, 5000)
+        make_tool(
+            name,
+            namespace,
+            "A test tool",
+            vec![],
+            "low",
+            true,
+            false,
+            5000,
+        )
     }
 
     #[test]
@@ -143,11 +152,25 @@ mod tests {
     fn test_register_overwrites_existing() {
         let mut reg = Registry::new();
         reg.register_tool(make_tool(
-            "fs.read", "fs", "Original description", vec![], "low", true, false, 5000,
+            "fs.read",
+            "fs",
+            "Original description",
+            vec![],
+            "low",
+            true,
+            false,
+            5000,
         ));
 
         reg.register_tool(make_tool(
-            "fs.read", "fs", "Updated description", vec![], "medium", true, true, 10000,
+            "fs.read",
+            "fs",
+            "Updated description",
+            vec![],
+            "medium",
+            true,
+            true,
+            10000,
         ));
 
         assert_eq!(reg.tool_count(), 1);
@@ -186,7 +209,16 @@ mod tests {
 
     #[test]
     fn test_make_tool_non_critical() {
-        let tool = make_tool("fs.read", "fs", "Read file", vec![], "low", true, false, 5000);
+        let tool = make_tool(
+            "fs.read",
+            "fs",
+            "Read file",
+            vec![],
+            "low",
+            true,
+            false,
+            5000,
+        );
         assert!(!tool.requires_confirmation); // low -> no confirmation
     }
 

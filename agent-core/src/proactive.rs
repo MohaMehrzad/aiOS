@@ -246,11 +246,7 @@ async fn proactive_check(
     let ww_count = std::process::Command::new("find")
         .args(["/etc", "-maxdepth", "2", "-perm", "-o+w", "-type", "f"])
         .output()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .count()
-        })
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
         .unwrap_or(0);
     if ww_count > 0 {
         goals_to_create.push((
@@ -275,17 +271,27 @@ async fn proactive_check(
     for (description, priority) in goals_to_create {
         // Check for duplicate: skip if a similar goal is already active
         if has_similar_active_goal(&state_w, &description).await {
-            debug!("Skipping duplicate proactive goal: {}", &description[..60.min(description.len())]);
+            debug!(
+                "Skipping duplicate proactive goal: {}",
+                &description[..60.min(description.len())]
+            );
             continue;
         }
 
         match state_w
             .goal_engine
-            .submit_goal(description.clone(), priority, "proactive-monitor".to_string())
+            .submit_goal(
+                description.clone(),
+                priority,
+                "proactive-monitor".to_string(),
+            )
             .await
         {
             Ok(goal_id) => {
-                info!("Proactive goal created: {goal_id} — {}", &description[..80.min(description.len())]);
+                info!(
+                    "Proactive goal created: {goal_id} — {}",
+                    &description[..80.min(description.len())]
+                );
 
                 // Decompose into tasks
                 if let Ok(tasks) = state_w
@@ -354,13 +360,11 @@ fn read_disk_usage_percent() -> f64 {
         .ok()
         .and_then(|output| {
             let text = String::from_utf8_lossy(&output.stdout).to_string();
-            text.lines()
-                .nth(1)
-                .and_then(|l| {
-                    l.split_whitespace()
-                        .find(|w| w.ends_with('%'))
-                        .and_then(|w| w.trim_end_matches('%').parse::<f64>().ok())
-                })
+            text.lines().nth(1).and_then(|l| {
+                l.split_whitespace()
+                    .find(|w| w.ends_with('%'))
+                    .and_then(|w| w.trim_end_matches('%').parse::<f64>().ok())
+            })
         })
         .unwrap_or(0.0)
 }

@@ -41,7 +41,10 @@ pub async fn run_autonomy_loop(
     cancel: CancellationToken,
     config: AutonomyConfig,
 ) {
-    info!("Autonomy loop started (tick={}ms)", config.tick_interval.as_millis());
+    info!(
+        "Autonomy loop started (tick={}ms)",
+        config.tick_interval.as_millis()
+    );
 
     loop {
         tokio::select! {
@@ -104,10 +107,7 @@ async fn autonomy_tick(
                         let task_count = new_tasks.len();
                         state.goal_engine.add_tasks(&goal.id, new_tasks);
                         state.goal_engine.update_status(&goal.id, "in_progress");
-                        info!(
-                            "Goal {} decomposed into {task_count} tasks",
-                            goal.id
-                        );
+                        info!("Goal {} decomposed into {task_count} tasks", goal.id);
                     }
                     Err(e) => {
                         error!("Failed to decompose goal {}: {e}", goal.id);
@@ -138,7 +138,9 @@ async fn autonomy_tick(
 
         // Mark task as in-progress
         state.task_planner.mark_in_progress(&task_id);
-        state.goal_engine.update_task_status(&goal_id, &task_id, "in_progress");
+        state
+            .goal_engine
+            .update_task_status(&goal_id, &task_id, "in_progress");
 
         // 4. Route task via agent router or handle directly
         let agent_id = state.agent_router.route_task(&task);
@@ -167,7 +169,9 @@ async fn autonomy_tick(
         // No local agent matched — try cluster routing if enabled
         if std::env::var("AIOS_CLUSTER_ENABLED").unwrap_or_default() == "true" {
             let cluster_guard = state.cluster.read().await;
-            if let Some(remote_node_id) = state.agent_router.route_task_to_node(&task, &cluster_guard) {
+            if let Some(remote_node_id) =
+                state.agent_router.route_task_to_node(&task, &cluster_guard)
+            {
                 drop(cluster_guard);
                 info!("Routing task {task_id} to remote node {remote_node_id}");
 
@@ -248,11 +252,9 @@ async fn autonomy_tick(
             let level_str_h = level.as_str().to_string();
             drop(state);
 
-            let tool_execution = execute_tool_calls_unlocked(
-                &clients_for_heuristic,
-                &task_id_h,
-                &heuristic_result,
-            ).await;
+            let tool_execution =
+                execute_tool_calls_unlocked(&clients_for_heuristic, &task_id_h, &heuristic_result)
+                    .await;
 
             {
                 let mut state = state_arc.write().await;
@@ -264,7 +266,8 @@ async fn autonomy_tick(
                     &level_str_h,
                     heuristic_result,
                     tool_execution,
-                ).await;
+                )
+                .await;
             }
 
             // Run housekeeping so goal completion is detected immediately
@@ -313,12 +316,8 @@ async fn autonomy_tick(
         .await;
 
         // Execute tool calls WITHOUT holding the lock
-        let tool_execution = execute_tool_calls_unlocked(
-            &work.clients,
-            &work.task_id,
-            &result,
-        )
-        .await;
+        let tool_execution =
+            execute_tool_calls_unlocked(&work.clients, &work.task_id, &result).await;
 
         // ── Phase 3: Reacquire write lock to record results ──
         let mut state = state_arc.write().await;
@@ -350,9 +349,7 @@ async fn run_housekeeping(state_arc: &Arc<RwLock<OrchestratorState>>) {
     let dead_agents = state.agent_router.dead_agents();
     for dead_id in &dead_agents {
         if let Some(stuck_task_id) = state.agent_router.get_assigned_task_id(dead_id) {
-            warn!(
-                "Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task"
-            );
+            warn!("Agent {dead_id} is dead with task {stuck_task_id} assigned — re-queuing task");
             state.agent_router.task_completed(dead_id, false);
             state.task_planner.resume_task(&stuck_task_id);
         }
@@ -463,7 +460,11 @@ fn get_preferred_provider(state: &OrchestratorState, goal_id: &str) -> String {
         .goal_engine
         .get_metadata(goal_id)
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
-        .and_then(|v| v.get("preferred_provider").and_then(|p| p.as_str()).map(String::from))
+        .and_then(|v| {
+            v.get("preferred_provider")
+                .and_then(|p| p.as_str())
+                .map(String::from)
+        })
         .unwrap_or_default()
 }
 
@@ -490,7 +491,7 @@ async fn execute_ai_task(
     system_prompt.push_str(
         "\n\nYou MUST always respond with ONLY a valid JSON object. \
          Never output natural language, markdown, or explanations outside of JSON. \
-         Your response must contain a \"tool_calls\" array with at least one tool to execute."
+         Your response must contain a \"tool_calls\" array with at least one tool to execute.",
     );
 
     // Query memory service for relevant context chunks
@@ -511,10 +512,8 @@ async fn execute_ai_task(
                     if !chunks.is_empty() {
                         let mut memory_context = String::from("\n\nRelevant memory context:\n");
                         for chunk in &chunks {
-                            memory_context.push_str(&format!(
-                                "- [{}] {}\n",
-                                chunk.source, chunk.content
-                            ));
+                            memory_context
+                                .push_str(&format!("- [{}] {}\n", chunk.source, chunk.content));
                         }
                         system_prompt.push_str(&memory_context);
                         info!("Assembled {} memory chunks for task context", chunks.len());
@@ -540,7 +539,11 @@ async fn execute_ai_task(
     if !relevant_messages.is_empty() {
         prompt.push_str("Previous conversation:\n");
         for msg in relevant_messages {
-            let label = if msg.sender == "user" { "[User]" } else { "[AI]" };
+            let label = if msg.sender == "user" {
+                "[User]"
+            } else {
+                "[AI]"
+            };
             prompt.push_str(&format!("{}: {}\n", label, msg.content));
         }
         prompt.push_str("\nExecute the task using the provided context.\n\n");
@@ -553,7 +556,7 @@ async fn execute_ai_task(
     prompt.push_str(
         "IMPORTANT — Self-Evolution:\n\
          If the task requires a tool you do NOT have, create one using plugin.create.\n\
-         The code must define: def main(input_data: dict) -> dict\n\n"
+         The code must define: def main(input_data: dict) -> dict\n\n",
     );
 
     prompt.push_str(
@@ -575,11 +578,15 @@ async fn execute_ai_task(
 
     // Try preferred backend first
     let result = match preferred_backend {
-        AiBackend::LocalRuntime => {
-            try_runtime_infer(clients, &prompt, &system_prompt).await
-        }
+        AiBackend::LocalRuntime => try_runtime_infer(clients, &prompt, &system_prompt).await,
         AiBackend::ApiGateway => {
-            try_api_gateway_infer_with_provider(clients, &prompt, &system_prompt, preferred_provider).await
+            try_api_gateway_infer_with_provider(
+                clients,
+                &prompt,
+                &system_prompt,
+                preferred_provider,
+            )
+            .await
         }
     };
 
@@ -591,7 +598,13 @@ async fn execute_ai_task(
     let fallback = match preferred_backend {
         AiBackend::LocalRuntime => {
             info!("Local runtime unavailable, falling back to API gateway");
-            try_api_gateway_infer_with_provider(clients, &prompt, &system_prompt, preferred_provider).await
+            try_api_gateway_infer_with_provider(
+                clients,
+                &prompt,
+                &system_prompt,
+                preferred_provider,
+            )
+            .await
         }
         AiBackend::ApiGateway => {
             // API gateway already tried all providers (qwen3/claude/openai).
@@ -611,7 +624,8 @@ async fn execute_ai_task(
     warn!("All AI backends unavailable, task will be marked as failed");
     AiInferenceResult {
         success: false,
-        response_text: "All AI backends are currently unavailable. The task could not be executed.".to_string(),
+        response_text: "All AI backends are currently unavailable. The task could not be executed."
+            .to_string(),
         tool_calls: vec![],
         model_used: "none".to_string(),
         tokens_used: 0,
@@ -802,19 +816,26 @@ fn try_heuristic_execution(task: &crate::proto::common::Task) -> Option<Vec<Tool
     }
 
     // ── Monitor tools: no parameters needed ──
-    if desc_lower.contains("monitor.cpu") || (desc_lower.contains("cpu") && desc_lower.contains("usage")) {
+    if desc_lower.contains("monitor.cpu")
+        || (desc_lower.contains("cpu") && desc_lower.contains("usage"))
+    {
         return Some(vec![ToolCallRequest {
             tool_name: "monitor.cpu".to_string(),
             input_json: b"{}".to_vec(),
         }]);
     }
-    if desc_lower.contains("monitor.memory") || (desc_lower.contains("memory") && desc_lower.contains("usage")) {
+    if desc_lower.contains("monitor.memory")
+        || (desc_lower.contains("memory") && desc_lower.contains("usage"))
+    {
         return Some(vec![ToolCallRequest {
             tool_name: "monitor.memory".to_string(),
             input_json: b"{}".to_vec(),
         }]);
     }
-    if desc_lower.contains("monitor.disk") || (desc_lower.contains("disk") && (desc_lower.contains("usage") || desc_lower.contains("space"))) {
+    if desc_lower.contains("monitor.disk")
+        || (desc_lower.contains("disk")
+            && (desc_lower.contains("usage") || desc_lower.contains("space")))
+    {
         return Some(vec![ToolCallRequest {
             tool_name: "monitor.disk".to_string(),
             input_json: b"{}".to_vec(),
@@ -833,7 +854,9 @@ fn try_heuristic_execution(task: &crate::proto::common::Task) -> Option<Vec<Tool
     }
 
     // ── DNS lookup ──
-    if desc_lower.contains("dns") && (desc_lower.contains("lookup") || desc_lower.contains("resolve")) {
+    if desc_lower.contains("dns")
+        && (desc_lower.contains("lookup") || desc_lower.contains("resolve"))
+    {
         if let Some(host) = extract_host_param(&desc_lower) {
             let input = serde_json::json!({"host": host});
             return Some(vec![ToolCallRequest {
@@ -898,7 +921,9 @@ fn extract_email_params(desc: &str) -> Option<serde_json::Value> {
 
     // Extract email address (to)
     for word in desc.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-' && c != '+');
+        let clean = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-' && c != '+'
+        });
         if clean.contains('@') && clean.contains('.') && clean.len() >= 5 {
             to = clean.to_string();
             break;
@@ -913,8 +938,11 @@ fn extract_email_params(desc: &str) -> Option<serde_json::Value> {
         .unwrap_or_default();
 
     // Extract body: look for "body: ...", "body '...'", "body \"...\""
-    body = extract_quoted_field(desc, &["body:", "body ", "body=", "Body:", "message:", "Message:"])
-        .unwrap_or_default();
+    body = extract_quoted_field(
+        desc,
+        &["body:", "body ", "body=", "Body:", "message:", "Message:"],
+    )
+    .unwrap_or_default();
 
     // If we still don't have subject/body, try splitting by common delimiters
     if subject.is_empty() || body.is_empty() {
@@ -923,12 +951,19 @@ fn extract_email_params(desc: &str) -> Option<serde_json::Value> {
         for part in &parts {
             let trimmed = part.trim();
             if subject.is_empty() {
-                if let Some(s) = trimmed.strip_prefix("Subject:").or_else(|| trimmed.strip_prefix("subject:")) {
+                if let Some(s) = trimmed
+                    .strip_prefix("Subject:")
+                    .or_else(|| trimmed.strip_prefix("subject:"))
+                {
                     subject = s.trim().to_string();
                 }
             }
             if body.is_empty() {
-                if let Some(b) = trimmed.strip_prefix("Body:").or_else(|| trimmed.strip_prefix("body:")).or_else(|| trimmed.strip_prefix("Message:")) {
+                if let Some(b) = trimmed
+                    .strip_prefix("Body:")
+                    .or_else(|| trimmed.strip_prefix("body:"))
+                    .or_else(|| trimmed.strip_prefix("Message:"))
+                {
                     body = b.trim().to_string();
                 }
             }
@@ -982,8 +1017,18 @@ fn extract_quoted_field(text: &str, prefixes: &[&str]) -> Option<String> {
             }
 
             // Try unquoted: take until next keyword or delimiter
-            let terminators = [" body:", " body ", " Body:", " message:", " Message:",
-                               " subject:", " Subject:", " — ", " with ", " and body"];
+            let terminators = [
+                " body:",
+                " body ",
+                " Body:",
+                " message:",
+                " Message:",
+                " subject:",
+                " Subject:",
+                " — ",
+                " with ",
+                " and body",
+            ];
             let mut end_pos = after.len();
             for term in &terminators {
                 if let Some(p) = after.to_lowercase().find(&term.to_lowercase()) {
@@ -1010,7 +1055,8 @@ fn extract_host_param(text: &str) -> Option<String> {
         if (*word == "ping" || *word == "net.ping" || *word == "resolve" || *word == "lookup")
             && i + 1 < words.len()
         {
-            let next = words[i + 1].trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
+            let next = words[i + 1]
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
             if next.contains('.') || next.contains(':') {
                 return Some(next.to_string());
             }
@@ -1019,7 +1065,8 @@ fn extract_host_param(text: &str) -> Option<String> {
 
     // Scan for anything that looks like a hostname or IP
     for word in &words {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
+        let clean =
+            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != ':' && c != '-');
         if clean.contains('.') && clean.len() >= 4 {
             // Looks like IP or domain
             let first_char = clean.chars().next().unwrap_or(' ');
@@ -1057,10 +1104,23 @@ fn extract_file_path(desc: &str) -> Option<String> {
 /// Extract a service name from description
 fn extract_service_param(text: &str) -> Option<String> {
     let known = [
-        "nginx", "apache", "postgres", "mysql", "redis", "docker",
-        "ssh", "sshd", "cron", "mongodb", "elasticsearch", "podman",
-        "aios-orchestrator", "aios-api-gateway", "aios-runtime",
-        "aios-tools", "aios-memory",
+        "nginx",
+        "apache",
+        "postgres",
+        "mysql",
+        "redis",
+        "docker",
+        "ssh",
+        "sshd",
+        "cron",
+        "mongodb",
+        "elasticsearch",
+        "podman",
+        "aios-orchestrator",
+        "aios-api-gateway",
+        "aios-runtime",
+        "aios-tools",
+        "aios-memory",
     ];
     for svc in &known {
         if text.contains(svc) {
@@ -1074,16 +1134,30 @@ fn extract_service_param(text: &str) -> Option<String> {
 fn extract_explicit_tool_call(desc: &str) -> Option<ToolCallRequest> {
     // Look for "tool.name" followed by JSON
     let known_namespaces = [
-        "fs.", "process.", "service.", "net.", "firewall.", "pkg.",
-        "sec.", "monitor.", "hw.", "web.", "git.", "code.", "self.",
-        "plugin.", "container.", "email.",
+        "fs.",
+        "process.",
+        "service.",
+        "net.",
+        "firewall.",
+        "pkg.",
+        "sec.",
+        "monitor.",
+        "hw.",
+        "web.",
+        "git.",
+        "code.",
+        "self.",
+        "plugin.",
+        "container.",
+        "email.",
     ];
 
     for ns in &known_namespaces {
         if let Some(pos) = desc.find(ns) {
             let tool_candidate = &desc[pos..];
             // Extract tool name (namespace.action)
-            let tool_end = tool_candidate.find(|c: char| !c.is_alphanumeric() && c != '.' && c != '_')
+            let tool_end = tool_candidate
+                .find(|c: char| !c.is_alphanumeric() && c != '.' && c != '_')
                 .unwrap_or(tool_candidate.len());
             let tool_name = &tool_candidate[..tool_end];
 
@@ -1096,8 +1170,7 @@ fn extract_explicit_tool_call(desc: &str) -> Option<ToolCallRequest> {
             // Look for JSON after the tool name
             let after_tool = &desc[pos + tool_end..];
             let input = if let Some(json_start) = after_tool.find('{') {
-                extract_json_from_text(&after_tool[json_start..])
-                    .unwrap_or(serde_json::json!({}))
+                extract_json_from_text(&after_tool[json_start..]).unwrap_or(serde_json::json!({}))
             } else {
                 serde_json::json!({})
             };
@@ -1122,7 +1195,14 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
         None => {
             // Log why parsing failed for debugging
             let preview: String = response_text.chars().take(200).collect();
-            let suffix: String = response_text.chars().rev().take(100).collect::<String>().chars().rev().collect();
+            let suffix: String = response_text
+                .chars()
+                .rev()
+                .take(100)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             tracing::warn!(
                 "parse_tool_calls: JSON extraction failed (len={text_len}). \
                  Start: {preview:?}... End: ...{suffix:?}"
@@ -1138,9 +1218,10 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
     if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
         for tc in tool_calls {
             let tool_name = tc.get("tool").and_then(|v| v.as_str()).unwrap_or("");
-            let input = tc.get("input").cloned().unwrap_or(serde_json::Value::Object(
-                serde_json::Map::new(),
-            ));
+            let input = tc
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
             if !tool_name.is_empty() {
                 if let Ok(input_bytes) = serde_json::to_vec(&input) {
@@ -1155,11 +1236,15 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
         // Fallback: try to extract tool calls from "steps", "tools_needed", or "actions" arrays
         let extracted = extract_tools_from_json_fallback(&parsed);
         if !extracted.is_empty() {
-            tracing::info!("parse_tool_calls: extracted {} tool calls from JSON fallback fields", extracted.len());
+            tracing::info!(
+                "parse_tool_calls: extracted {} tool calls from JSON fallback fields",
+                extracted.len()
+            );
             return extracted;
         }
 
-        let keys: Vec<&str> = parsed.as_object()
+        let keys: Vec<&str> = parsed
+            .as_object()
             .map(|o| o.keys().map(|k| k.as_str()).collect())
             .unwrap_or_default();
         tracing::warn!("parse_tool_calls: JSON parsed OK but no tool_calls array. Keys: {keys:?}");
@@ -1169,7 +1254,10 @@ fn parse_tool_calls(response_text: &str) -> Vec<ToolCallRequest> {
     if calls.is_empty() {
         let nl_calls = extract_tools_from_natural_language(response_text);
         if !nl_calls.is_empty() {
-            tracing::info!("parse_tool_calls: extracted {} tool calls from natural language", nl_calls.len());
+            tracing::info!(
+                "parse_tool_calls: extracted {} tool calls from natural language",
+                nl_calls.len()
+            );
             return nl_calls;
         }
     }
@@ -1205,8 +1293,8 @@ async fn execute_tool_call(
     let resp = response.into_inner();
 
     if resp.success {
-        let output: serde_json::Value = serde_json::from_slice(&resp.output_json)
-            .unwrap_or_else(|_| {
+        let output: serde_json::Value =
+            serde_json::from_slice(&resp.output_json).unwrap_or_else(|_| {
                 serde_json::Value::String(String::from_utf8_lossy(&resp.output_json).to_string())
             });
         Ok(serde_json::json!({
@@ -1217,7 +1305,11 @@ async fn execute_tool_call(
             "duration_ms": resp.duration_ms,
         }))
     } else {
-        Err(anyhow::anyhow!("Tool '{}' failed: {}", tool_name, resp.error))
+        Err(anyhow::anyhow!(
+            "Tool '{}' failed: {}",
+            tool_name,
+            resp.error
+        ))
     }
 }
 
@@ -1310,11 +1402,14 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
     if let Some(steps) = parsed.get("steps").and_then(|v| v.as_array()) {
         for step in steps {
             // Step might be {"tool": "monitor.cpu", ...} or {"action": "email.send", "parameters": {...}}
-            let tool_name = step.get("tool").and_then(|v| v.as_str())
+            let tool_name = step
+                .get("tool")
+                .and_then(|v| v.as_str())
                 .or_else(|| step.get("action").and_then(|v| v.as_str()))
                 .or_else(|| step.get("name").and_then(|v| v.as_str()));
             if let Some(tool) = tool_name {
-                let input = step.get("input")
+                let input = step
+                    .get("input")
                     .or_else(|| step.get("parameters"))
                     .or_else(|| step.get("params"))
                     .or_else(|| step.get("arguments"))
@@ -1329,7 +1424,8 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
                 }
             } else {
                 // Try to extract tool name from step description text
-                let text = step.as_str()
+                let text = step
+                    .as_str()
                     .or_else(|| step.get("task").and_then(|v| v.as_str()))
                     .or_else(|| step.get("description").and_then(|v| v.as_str()))
                     .unwrap_or("");
@@ -1344,10 +1440,16 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
             for tool in tools {
                 // Tool might be a string name or an object with name + params
                 if let Some(obj) = tool.as_object() {
-                    let name = obj.get("tool").or_else(|| obj.get("name"))
-                        .and_then(|v| v.as_str()).unwrap_or("");
-                    let input = obj.get("input").or_else(|| obj.get("parameters"))
-                        .cloned().unwrap_or(serde_json::json!({}));
+                    let name = obj
+                        .get("tool")
+                        .or_else(|| obj.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let input = obj
+                        .get("input")
+                        .or_else(|| obj.get("parameters"))
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
                     if !name.is_empty() {
                         if let Ok(bytes) = serde_json::to_vec(&input) {
                             calls.push(ToolCallRequest {
@@ -1358,7 +1460,8 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
                     }
                 } else if let Some(name) = tool.as_str() {
                     // Use extra_params if available for this tool
-                    let input = extra_params.get(name)
+                    let input = extra_params
+                        .get(name)
                         .cloned()
                         .unwrap_or(serde_json::json!({}));
                     if let Ok(bytes) = serde_json::to_vec(&input) {
@@ -1376,10 +1479,13 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
     if calls.is_empty() {
         if let Some(actions) = parsed.get("actions").and_then(|v| v.as_array()) {
             for action in actions {
-                let tool_name = action.get("tool").and_then(|v| v.as_str())
+                let tool_name = action
+                    .get("tool")
+                    .and_then(|v| v.as_str())
                     .or_else(|| action.get("name").and_then(|v| v.as_str()));
                 if let Some(tool) = tool_name {
-                    let input = action.get("input")
+                    let input = action
+                        .get("input")
                         .or_else(|| action.get("parameters"))
                         .or_else(|| action.get("params"))
                         .cloned()
@@ -1415,7 +1521,9 @@ fn extract_tools_from_json_fallback(parsed: &serde_json::Value) -> Vec<ToolCallR
 
 /// Scan the parsed JSON for tool parameters that might be stored under various keys.
 /// Returns a map of tool_name -> parameters found.
-fn find_tool_parameters(parsed: &serde_json::Value) -> std::collections::HashMap<String, serde_json::Value> {
+fn find_tool_parameters(
+    parsed: &serde_json::Value,
+) -> std::collections::HashMap<String, serde_json::Value> {
     let mut params = std::collections::HashMap::new();
 
     let obj = match parsed.as_object() {
@@ -1424,7 +1532,14 @@ fn find_tool_parameters(parsed: &serde_json::Value) -> std::collections::HashMap
     };
 
     // Look for "parameters", "inputs", "arguments", "input" at root level
-    for key in &["parameters", "inputs", "arguments", "input", "params", "tool_input"] {
+    for key in &[
+        "parameters",
+        "inputs",
+        "arguments",
+        "input",
+        "params",
+        "tool_input",
+    ] {
         if let Some(val) = obj.get(*key) {
             if let Some(inner_obj) = val.as_object() {
                 // If this contains a "tool" key, it's tool-specific: {"tool": "email.send", "to": "..."}
@@ -1447,11 +1562,13 @@ fn find_tool_parameters(parsed: &serde_json::Value) -> std::collections::HashMap
     if let Some(tc) = obj.get("tool_calls").and_then(|v| v.as_array()) {
         for item in tc {
             if let Some(item_obj) = item.as_object() {
-                let name = item_obj.get("tool")
+                let name = item_obj
+                    .get("tool")
                     .or_else(|| item_obj.get("name"))
                     .or_else(|| item_obj.get("function"))
                     .and_then(|v| v.as_str());
-                let input = item_obj.get("input")
+                let input = item_obj
+                    .get("input")
                     .or_else(|| item_obj.get("parameters"))
                     .or_else(|| item_obj.get("params"))
                     .or_else(|| item_obj.get("arguments"));
@@ -1467,7 +1584,9 @@ fn find_tool_parameters(parsed: &serde_json::Value) -> std::collections::HashMap
         if let Some(tools) = obj.get("tools_needed").and_then(|v| v.as_array()) {
             for tool in tools {
                 if let Some(name) = tool.as_str() {
-                    params.entry(name.to_string()).or_insert_with(|| wildcard.clone());
+                    params
+                        .entry(name.to_string())
+                        .or_insert_with(|| wildcard.clone());
                 }
             }
         }
@@ -1487,7 +1606,9 @@ fn extract_tools_from_natural_language(text: &str) -> Vec<ToolCallRequest> {
     for word_idx in 0..text.len() {
         let remaining = &text[word_idx..];
         // Look for known trigger words followed by a tool name pattern
-        let trigger_prefixes = ["call ", "Call ", "use ", "Use ", "execute ", "Execute ", "run ", "Run "];
+        let trigger_prefixes = [
+            "call ", "Call ", "use ", "Use ", "execute ", "Execute ", "run ", "Run ",
+        ];
         for prefix in &trigger_prefixes {
             if remaining.starts_with(prefix) {
                 let after = &remaining[prefix.len()..];
@@ -1509,8 +1630,21 @@ fn extract_tools_from_natural_language(text: &str) -> Vec<ToolCallRequest> {
     // This catches: "monitor.cpu and monitor.memory tools"
     if calls.is_empty() {
         let known_namespaces = [
-            "fs", "process", "service", "net", "firewall", "pkg",
-            "sec", "monitor", "hw", "web", "git", "code", "self", "plugin", "container",
+            "fs",
+            "process",
+            "service",
+            "net",
+            "firewall",
+            "pkg",
+            "sec",
+            "monitor",
+            "hw",
+            "web",
+            "git",
+            "code",
+            "self",
+            "plugin",
+            "container",
         ];
         for ns in &known_namespaces {
             let prefix = format!("{}.", ns);
@@ -1592,7 +1726,8 @@ fn json_to_readable(parsed: &serde_json::Value) -> String {
     }
 
     // Handle "needs_clarification" responses with inline questions
-    if parsed.get("needs_clarification").and_then(|v| v.as_bool()) == Some(true) && parts.is_empty() {
+    if parsed.get("needs_clarification").and_then(|v| v.as_bool()) == Some(true) && parts.is_empty()
+    {
         parts.push("I need some more information before I can proceed:".to_string());
     }
 
@@ -1606,7 +1741,10 @@ fn json_to_readable(parsed: &serde_json::Value) -> String {
                 if let Some(text) = s.as_str() {
                     Some(format!("{}. {}", i + 1, text))
                 } else {
-                    let task = s.get("task").or_else(|| s.get("description")).and_then(|v| v.as_str());
+                    let task = s
+                        .get("task")
+                        .or_else(|| s.get("description"))
+                        .and_then(|v| v.as_str());
                     task.map(|t| format!("{}. {}", i + 1, t))
                 }
             })
@@ -1617,7 +1755,14 @@ fn json_to_readable(parsed: &serde_json::Value) -> String {
     }
 
     // Handle "message" / "response" / "answer" / "explanation" (common model outputs)
-    for key in &["message", "response", "answer", "explanation", "summary", "output"] {
+    for key in &[
+        "message",
+        "response",
+        "answer",
+        "explanation",
+        "summary",
+        "output",
+    ] {
         if let Some(val) = parsed.get(*key).and_then(|v| v.as_str()) {
             if !val.is_empty() && !parts.iter().any(|p| p.contains(val)) {
                 parts.push(val.to_string());
@@ -1630,7 +1775,11 @@ fn json_to_readable(parsed: &serde_json::Value) -> String {
         if !tool_calls.is_empty() {
             let tc_text: Vec<String> = tool_calls
                 .iter()
-                .filter_map(|tc| tc.get("tool").and_then(|v| v.as_str()).map(|t| format!("- {}", t)))
+                .filter_map(|tc| {
+                    tc.get("tool")
+                        .and_then(|v| v.as_str())
+                        .map(|t| format!("- {}", t))
+                })
                 .collect();
             if !tc_text.is_empty() {
                 parts.push(format!("Actions planned:\n{}", tc_text.join("\n")));
@@ -1677,7 +1826,11 @@ fn extract_ai_display_text(response_text: &str) -> String {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                if cleaned.is_empty() { None } else { Some(cleaned) }
+                if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(cleaned)
+                }
             } else {
                 None
             };
@@ -1707,7 +1860,9 @@ fn summarize_tool_output(tool_name: &str, output: Option<&serde_json::Value>) ->
 
     // Plugin tools — extract name + description, skip code
     if tool_name.starts_with("plugin.create") || tool_name == "plugin.create" {
-        let name = output.get("name").and_then(|v| v.as_str())
+        let name = output
+            .get("name")
+            .and_then(|v| v.as_str())
             .or_else(|| output.get("plugin_name").and_then(|v| v.as_str()));
         let desc = output.get("description").and_then(|v| v.as_str());
         return match (name, desc) {
@@ -1725,7 +1880,11 @@ fn summarize_tool_output(tool_name: &str, output: Option<&serde_json::Value>) ->
                 serde_json::Value::String(s) => s.clone(),
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
-            let truncated = if s.len() > 300 { format!("{}...", &s[..300]) } else { s };
+            let truncated = if s.len() > 300 {
+                format!("{}...", &s[..300])
+            } else {
+                s
+            };
             return format!("'{plugin_name}' returned: {truncated}");
         }
         return format!("'{plugin_name}' completed successfully").to_string();
@@ -1755,7 +1914,11 @@ fn summarize_tool_output(tool_name: &str, output: Option<&serde_json::Value>) ->
             if let Some(len) = body_len {
                 summary.push_str(&format!(" [{len} chars]"));
             }
-            if summary.is_empty() { "OK".to_string() } else { summary }
+            if summary.is_empty() {
+                "OK".to_string()
+            } else {
+                summary
+            }
         }
         // Service management
         t if t.starts_with("service.") || t.starts_with("process.") => {
@@ -1772,7 +1935,11 @@ fn summarize_tool_output(tool_name: &str, output: Option<&serde_json::Value>) ->
                         serde_json::Value::String(s) => s.clone(),
                         other => serde_json::to_string(other).unwrap_or_default(),
                     };
-                    let truncated = if s.len() > 200 { format!("{}...", &s[..200]) } else { s };
+                    let truncated = if s.len() > 200 {
+                        format!("{}...", &s[..200])
+                    } else {
+                        s
+                    };
                     return truncated;
                 }
             }
@@ -1817,7 +1984,10 @@ fn build_completion_summary(response_text: &str, tool_results: &[serde_json::Val
             let summary = summarize_tool_output(tool_name, tr.get("output"));
             parts.push(format!("**{tool_name}**: {summary}"));
         } else {
-            let err = tr.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            let err = tr
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
             parts.push(format!("**{tool_name}** failed: {err}"));
         }
     }
@@ -1864,11 +2034,9 @@ async fn record_ai_result(
         state
             .goal_engine
             .update_task_status(goal_id, task_id, "failed");
-        state.goal_engine.add_message(
-            goal_id,
-            "system",
-            &format!("Task failed: {error_msg}"),
-        );
+        state
+            .goal_engine
+            .add_message(goal_id, "system", &format!("Task failed: {error_msg}"));
 
         state.result_aggregator.record_result(
             goal_id,
@@ -1892,22 +2060,25 @@ async fn record_ai_result(
     if result.tool_calls.is_empty() {
         // Count how many times we've already asked for input on this goal
         // to prevent infinite awaiting_input loops
-        let ai_msg_count = state.goal_engine.get_messages(goal_id)
+        let ai_msg_count = state
+            .goal_engine
+            .get_messages(goal_id)
             .iter()
             .filter(|m| m.sender == "ai")
             .count();
 
         if ai_msg_count >= 3 {
             // Too many retries — fail the task instead of looping forever
-            let error_msg = "AI was unable to produce executable tool calls after multiple attempts. \
+            let error_msg =
+                "AI was unable to produce executable tool calls after multiple attempts. \
                              The model may not support the required JSON output format.";
             state.task_planner.fail_task(task_id, error_msg);
-            state.goal_engine.update_task_status(goal_id, task_id, "failed");
-            state.goal_engine.add_message(
-                goal_id,
-                "system",
-                &format!("Task failed: {error_msg}"),
-            );
+            state
+                .goal_engine
+                .update_task_status(goal_id, task_id, "failed");
+            state
+                .goal_engine
+                .add_message(goal_id, "system", &format!("Task failed: {error_msg}"));
             warn!("Task {task_id}: Failed after {ai_msg_count} attempts without tool calls");
             return;
         }
@@ -1953,11 +2124,9 @@ async fn record_ai_result(
         state
             .goal_engine
             .update_task_status(goal_id, task_id, "failed");
-        state.goal_engine.add_message(
-            goal_id,
-            "system",
-            &format!("Task failed: {error_msg}"),
-        );
+        state
+            .goal_engine
+            .add_message(goal_id, "system", &format!("Task failed: {error_msg}"));
 
         state.result_aggregator.record_result(
             goal_id,
@@ -1976,10 +2145,7 @@ async fn record_ai_result(
             "ai_execution",
             &[task_id.to_string()],
             "failed",
-            &format!(
-                "Task '{}' failed during tool execution",
-                task_description
-            ),
+            &format!("Task '{}' failed during tool execution", task_description),
             intelligence_level,
             "ai",
         );
@@ -2129,7 +2295,8 @@ mod tests {
         let task = crate::proto::common::Task {
             id: "t1".into(),
             goal_id: "g1".into(),
-            description: r#"email.send {"to": "test@gmail.com", "subject": "Test", "body": "Hello"}"#.into(),
+            description:
+                r#"email.send {"to": "test@gmail.com", "subject": "Test", "body": "Hello"}"#.into(),
             assigned_agent: String::new(),
             status: "pending".into(),
             intelligence_level: "reactive".into(),
@@ -2234,7 +2401,8 @@ mod tests {
         let task = crate::proto::common::Task {
             id: "t1".into(),
             goal_id: "g1".into(),
-            description: r#"call email.send {"to": "a@b.com", "subject": "Hi", "body": "Test"}"#.into(),
+            description: r#"call email.send {"to": "a@b.com", "subject": "Hi", "body": "Test"}"#
+                .into(),
             assigned_agent: String::new(),
             status: "pending".into(),
             intelligence_level: "reactive".into(),

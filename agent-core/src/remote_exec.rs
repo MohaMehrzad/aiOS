@@ -53,14 +53,13 @@ impl RemoteExecutor {
         let mut client =
             crate::proto::orchestrator::orchestrator_client::OrchestratorClient::new(channel);
 
-        let request =
-            tonic::Request::new(crate::proto::orchestrator::SubmitGoalRequest {
-                description: description.to_string(),
-                priority,
-                source: source.to_string(),
-                tags: vec![],
-                metadata_json: vec![],
-            });
+        let request = tonic::Request::new(crate::proto::orchestrator::SubmitGoalRequest {
+            description: description.to_string(),
+            priority,
+            source: source.to_string(),
+            tags: vec![],
+            metadata_json: vec![],
+        });
 
         let response = client
             .submit_goal(request)

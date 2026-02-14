@@ -108,13 +108,25 @@ fn install_linux(name: &str) -> Result<(bool, String)> {
 
 fn detect_package_manager() -> Result<(String, Vec<String>)> {
     if std::path::Path::new("/usr/bin/apt-get").exists() {
-        Ok(("apt-get".to_string(), vec!["install".to_string(), "-y".to_string()]))
+        Ok((
+            "apt-get".to_string(),
+            vec!["install".to_string(), "-y".to_string()],
+        ))
     } else if std::path::Path::new("/usr/bin/dnf").exists() {
-        Ok(("dnf".to_string(), vec!["install".to_string(), "-y".to_string()]))
+        Ok((
+            "dnf".to_string(),
+            vec!["install".to_string(), "-y".to_string()],
+        ))
     } else if std::path::Path::new("/usr/bin/yum").exists() {
-        Ok(("yum".to_string(), vec!["install".to_string(), "-y".to_string()]))
+        Ok((
+            "yum".to_string(),
+            vec!["install".to_string(), "-y".to_string()],
+        ))
     } else if std::path::Path::new("/usr/bin/pacman").exists() {
-        Ok(("pacman".to_string(), vec!["-S".to_string(), "--noconfirm".to_string()]))
+        Ok((
+            "pacman".to_string(),
+            vec!["-S".to_string(), "--noconfirm".to_string()],
+        ))
     } else {
         Err(anyhow::anyhow!("No supported package manager found"))
     }
@@ -122,15 +134,11 @@ fn detect_package_manager() -> Result<(String, Vec<String>)> {
 
 fn get_linux_package_version(pm: &str, name: &str) -> String {
     let output = match pm {
-        "apt-get" => Command::new("dpkg")
-            .args(["-s", name])
-            .output(),
+        "apt-get" => Command::new("dpkg").args(["-s", name]).output(),
         "dnf" | "yum" => Command::new("rpm")
             .args(["-q", "--queryformat", "%{VERSION}", name])
             .output(),
-        "pacman" => Command::new("pacman")
-            .args(["-Q", name])
-            .output(),
+        "pacman" => Command::new("pacman").args(["-Q", name]).output(),
         _ => return "unknown".to_string(),
     };
 

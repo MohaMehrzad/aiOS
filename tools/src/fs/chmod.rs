@@ -33,8 +33,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     let mode = u32::from_str_radix(stripped, 8)
         .with_context(|| format!("fs.chmod: invalid octal mode string: {mode_str}"))?;
 
-    let metadata =
-        fs::metadata(path).with_context(|| format!("fs.chmod: cannot stat {path}"))?;
+    let metadata = fs::metadata(path).with_context(|| format!("fs.chmod: cannot stat {path}"))?;
 
     let mut permissions = metadata.permissions();
     permissions.set_mode(mode);

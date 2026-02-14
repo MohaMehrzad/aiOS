@@ -47,8 +47,7 @@ fn add_pf_rule(_chain: &str, rule: &str, action: &str) -> Result<bool> {
     let combined = format!("{}\n{}\n", current_rules.trim(), new_rule);
 
     let tmp_path = "/tmp/aios_pf_rules.conf";
-    std::fs::write(tmp_path, &combined)
-        .context("Failed to write temporary PF rules file")?;
+    std::fs::write(tmp_path, &combined).context("Failed to write temporary PF rules file")?;
 
     let output = Command::new("pfctl")
         .args(["-f", tmp_path])

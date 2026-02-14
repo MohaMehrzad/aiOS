@@ -37,13 +37,7 @@ impl ServiceRegistry {
     }
 
     /// Register a service
-    pub fn register(
-        &mut self,
-        name: &str,
-        address: SocketAddr,
-        service_type: &str,
-        version: &str,
-    ) {
+    pub fn register(&mut self, name: &str, address: SocketAddr, service_type: &str, version: &str) {
         info!("Service registered: {name} at {address} (type: {service_type})");
 
         self.services.insert(
@@ -63,12 +57,22 @@ impl ServiceRegistry {
     /// Register with default aiOS service ports
     pub fn register_defaults(&mut self) {
         let defaults = [
-            ("orchestrator", "0.0.0.0:50051", "grpc", env!("CARGO_PKG_VERSION")),
+            (
+                "orchestrator",
+                "0.0.0.0:50051",
+                "grpc",
+                env!("CARGO_PKG_VERSION"),
+            ),
             ("runtime", "0.0.0.0:50055", "grpc", "0.1.0"),
             ("tools", "0.0.0.0:50052", "grpc", "0.1.0"),
             ("memory", "0.0.0.0:50053", "grpc", "0.1.0"),
             ("api-gateway", "0.0.0.0:50054", "grpc", "0.1.0"),
-            ("management", "0.0.0.0:9090", "http", env!("CARGO_PKG_VERSION")),
+            (
+                "management",
+                "0.0.0.0:9090",
+                "http",
+                env!("CARGO_PKG_VERSION"),
+            ),
         ];
 
         for (name, addr, svc_type, version) in &defaults {
@@ -86,9 +90,9 @@ impl ServiceRegistry {
 
     /// Look up a service by name
     pub fn lookup(&self, name: &str) -> Option<&ServiceInfo> {
-        self.services.get(name).filter(|s| {
-            s.last_heartbeat.elapsed() < self.heartbeat_timeout
-        })
+        self.services
+            .get(name)
+            .filter(|s| s.last_heartbeat.elapsed() < self.heartbeat_timeout)
     }
 
     /// Look up services by type
@@ -141,10 +145,7 @@ impl ServiceRegistry {
     }
 
     /// Run discovery service background loop
-    pub async fn run(
-        registry: Arc<RwLock<Self>>,
-        cancel: tokio_util::sync::CancellationToken,
-    ) {
+    pub async fn run(registry: Arc<RwLock<Self>>, cancel: tokio_util::sync::CancellationToken) {
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => {

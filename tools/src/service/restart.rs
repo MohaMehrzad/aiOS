@@ -57,9 +57,7 @@ fn restart_launchctl(name: &str) -> Result<(bool, u32)> {
     for path in &plist_paths {
         if std::path::Path::new(path).exists() {
             // Unload (stop)
-            let _ = Command::new("launchctl")
-                .args(["unload", path])
-                .output();
+            let _ = Command::new("launchctl").args(["unload", path]).output();
 
             std::thread::sleep(std::time::Duration::from_millis(200));
 

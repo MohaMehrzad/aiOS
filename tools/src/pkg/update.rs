@@ -112,10 +112,7 @@ fn update_apt() -> Result<u32> {
         .context("Failed to check upgradable packages")?;
 
     let stdout = String::from_utf8_lossy(&check.stdout);
-    let count = stdout
-        .lines()
-        .filter(|l| l.starts_with("Inst "))
-        .count() as u32;
+    let count = stdout.lines().filter(|l| l.starts_with("Inst ")).count() as u32;
 
     if count > 0 {
         let upgrade = Command::new("apt-get")

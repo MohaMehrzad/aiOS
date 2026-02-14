@@ -35,23 +35,47 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     let input: Input = serde_json::from_slice(input).context("Invalid JSON input")?;
 
     let project_path = Path::new(&input.path).join(&input.name);
-    fs::create_dir_all(&project_path)
-        .with_context(|| format!("Failed to create project directory: {}", project_path.display()))?;
+    fs::create_dir_all(&project_path).with_context(|| {
+        format!(
+            "Failed to create project directory: {}",
+            project_path.display()
+        )
+    })?;
 
     let mut files_created = Vec::new();
 
     match input.project_type.as_str() {
         "rust" => {
-            scaffold_rust(&project_path, &input.name, &input.description, &mut files_created)?;
+            scaffold_rust(
+                &project_path,
+                &input.name,
+                &input.description,
+                &mut files_created,
+            )?;
         }
         "python" => {
-            scaffold_python(&project_path, &input.name, &input.description, &mut files_created)?;
+            scaffold_python(
+                &project_path,
+                &input.name,
+                &input.description,
+                &mut files_created,
+            )?;
         }
         "node" => {
-            scaffold_node(&project_path, &input.name, &input.description, &mut files_created)?;
+            scaffold_node(
+                &project_path,
+                &input.name,
+                &input.description,
+                &mut files_created,
+            )?;
         }
         _ => {
-            scaffold_generic(&project_path, &input.name, &input.description, &mut files_created)?;
+            scaffold_generic(
+                &project_path,
+                &input.name,
+                &input.description,
+                &mut files_created,
+            )?;
         }
     }
 
@@ -62,7 +86,11 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         "node" => "node_modules/\ndist/\n.env\n.DS_Store\n",
         _ => ".DS_Store\n*.swp\n",
     };
-    write_file(&project_path.join(".gitignore"), gitignore_content, &mut files_created)?;
+    write_file(
+        &project_path.join(".gitignore"),
+        gitignore_content,
+        &mut files_created,
+    )?;
 
     // Create README
     let readme = format!(
@@ -152,11 +180,7 @@ build-backend = "setuptools.build_meta"
         files,
     )?;
 
-    write_file(
-        &path.join("tests").join("__init__.py"),
-        "",
-        files,
-    )?;
+    write_file(&path.join("tests").join("__init__.py"), "", files)?;
 
     write_file(
         &path.join("tests").join("test_basic.py"),
@@ -217,8 +241,7 @@ fn write_file(path: &Path, content: &str, files: &mut Vec<String>) -> Result<()>
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, content)
-        .with_context(|| format!("Failed to write: {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("Failed to write: {}", path.display()))?;
     files.push(path.to_string_lossy().to_string());
     Ok(())
 }

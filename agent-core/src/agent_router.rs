@@ -121,9 +121,9 @@ impl AgentRouter {
                     if required_tools.is_empty() {
                         return false;
                     }
-                    required_tools.iter().any(|tool| {
-                        agent.registration.tool_namespaces.contains(tool)
-                    })
+                    required_tools
+                        .iter()
+                        .any(|tool| agent.registration.tool_namespaces.contains(tool))
                 })
                 .collect();
         }
@@ -210,13 +210,19 @@ impl AgentRouter {
         }
 
         // Extract required agent type from task tools
-        let required_tool = task.required_tools.first().map(|s| s.as_str()).unwrap_or("");
+        let required_tool = task
+            .required_tools
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("");
         if required_tool.is_empty() {
             return None;
         }
 
         // Ask cluster manager to find a node with matching agent
-        cluster.route_to_node(required_tool).map(|n| n.address.clone())
+        cluster
+            .route_to_node(required_tool)
+            .map(|n| n.address.clone())
     }
 }
 
@@ -239,7 +245,11 @@ mod tests {
     async fn test_register_and_list() {
         let mut router = AgentRouter::new();
         router
-            .register_agent(make_registration("agent-1", "system", vec!["fs", "process"]))
+            .register_agent(make_registration(
+                "agent-1",
+                "system",
+                vec!["fs", "process"],
+            ))
             .await;
 
         let agents = router.list_agents().await;
@@ -254,7 +264,11 @@ mod tests {
             .register_agent(make_registration("sys-1", "system", vec!["fs", "process"]))
             .await;
         router
-            .register_agent(make_registration("net-1", "network", vec!["net", "firewall"]))
+            .register_agent(make_registration(
+                "net-1",
+                "network",
+                vec!["net", "firewall"],
+            ))
             .await;
 
         let task = Task {

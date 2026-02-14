@@ -70,7 +70,9 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-    let mut stmt = conn.prepare(&sql).context("Failed to prepare audit query")?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("Failed to prepare audit query")?;
     let entries: Vec<AuditEntry> = stmt
         .query_map(param_refs.as_slice(), |row| {
             Ok(AuditEntry {

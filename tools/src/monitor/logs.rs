@@ -75,13 +75,7 @@ fn read_logs_macos(lines: u32, service: &str) -> Result<Vec<String>> {
 fn read_logs_linux(lines: u32, service: &str) -> Result<Vec<String>> {
     // Use journalctl on Linux
     let mut cmd = Command::new("journalctl");
-    cmd.args([
-        "-n",
-        &lines.to_string(),
-        "--no-pager",
-        "-o",
-        "short-iso",
-    ]);
+    cmd.args(["-n", &lines.to_string(), "--no-pager", "-o", "short-iso"]);
 
     if !service.is_empty() {
         cmd.args(["-u", &format!("{}.service", service)]);

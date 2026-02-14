@@ -110,14 +110,20 @@ impl AgentSpawner {
                                             name: agent_name,
                                             agent_type: agent_type.to_string(),
                                             module,
-                                            capabilities: vec![format!("{}_management", agent_type)],
+                                            capabilities: vec![format!(
+                                                "{}_management",
+                                                agent_type
+                                            )],
                                             tool_namespaces: caps,
                                             max_restarts: 5,
                                             restart_delay: Duration::from_secs(5),
                                         });
                                     }
                                     Err(e) => {
-                                        warn!("Failed to parse agent config {}: {e}", path.display());
+                                        warn!(
+                                            "Failed to parse agent config {}: {e}",
+                                            path.display()
+                                        );
                                     }
                                 }
                             }
@@ -138,7 +144,11 @@ impl AgentSpawner {
                     agent_type: "system".to_string(),
                     module: "aios_agent.agents.system".to_string(),
                     capabilities: vec!["system_management".to_string()],
-                    tool_namespaces: vec!["fs".to_string(), "process".to_string(), "service".to_string()],
+                    tool_namespaces: vec![
+                        "fs".to_string(),
+                        "process".to_string(),
+                        "service".to_string(),
+                    ],
                     max_restarts: 5,
                     restart_delay: Duration::from_secs(5),
                 },
@@ -281,9 +291,7 @@ impl AgentSpawner {
     pub fn get_status(&self) -> Vec<(String, AgentProcessStatus, u32)> {
         self.agents
             .iter()
-            .map(|(name, agent)| {
-                (name.clone(), agent.status.clone(), agent.restart_count)
-            })
+            .map(|(name, agent)| (name.clone(), agent.status.clone(), agent.restart_count))
             .collect()
     }
 

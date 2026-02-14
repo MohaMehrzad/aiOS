@@ -8,7 +8,11 @@ use tracing::warn;
 
 /// Dangerous patterns and their risk scores
 const DANGEROUS_PATTERNS: &[(&str, u32, &str)] = &[
-    ("os.system(", 30, "Arbitrary command execution via os.system"),
+    (
+        "os.system(",
+        30,
+        "Arbitrary command execution via os.system",
+    ),
     ("subprocess.call(", 20, "Subprocess execution"),
     ("subprocess.Popen(", 20, "Subprocess execution"),
     ("subprocess.run(", 15, "Subprocess execution"),
@@ -16,11 +20,7 @@ const DANGEROUS_PATTERNS: &[(&str, u32, &str)] = &[
     ("exec(", 25, "Dynamic code execution"),
     ("compile(", 15, "Dynamic code compilation"),
     ("__import__(", 20, "Dynamic module import"),
-    (
-        "importlib.import_module(",
-        15,
-        "Dynamic module import",
-    ),
+    ("importlib.import_module(", 15, "Dynamic module import"),
     ("open(", 5, "File access (check paths)"),
     ("shutil.rmtree(", 20, "Recursive directory deletion"),
     ("os.remove(", 10, "File deletion"),

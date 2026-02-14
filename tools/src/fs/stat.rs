@@ -31,8 +31,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow::anyhow!("fs.stat: missing required field 'path'"))?;
 
     // Use symlink_metadata so we can detect symlinks without following them
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("fs.stat: cannot stat {path}"))?;
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("fs.stat: cannot stat {path}"))?;
 
     let size = metadata.len();
     let mode = metadata.mode();

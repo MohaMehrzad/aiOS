@@ -57,7 +57,9 @@ impl ContextAssembler {
         for (trigger, action, success_rate) in available_patterns {
             let content = format!(
                 "Previously when '{}' occurred, action '{}' was taken with {:.0}% success rate",
-                trigger, action, success_rate * 100.0
+                trigger,
+                action,
+                success_rate * 100.0
             );
             let tokens = estimate_tokens(&content);
             if total_tokens + tokens > self.max_context_tokens {
@@ -72,11 +74,7 @@ impl ContextAssembler {
         }
 
         // Build system prompt
-        let system_prompt = build_system_prompt(
-            task_description,
-            intelligence_level,
-            tool_names,
-        );
+        let system_prompt = build_system_prompt(task_description, intelligence_level, tool_names);
         total_tokens += estimate_tokens(&system_prompt);
 
         debug!(

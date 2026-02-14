@@ -53,12 +53,10 @@ impl SecretManager {
             }
         }
 
-        let contents = std::fs::read_to_string(&self.secrets_path)
-            .context("Failed to read secrets file")?;
+        let contents =
+            std::fs::read_to_string(&self.secrets_path).context("Failed to read secrets file")?;
 
-        let table: toml::Table = contents
-            .parse()
-            .context("Failed to parse secrets TOML")?;
+        let table: toml::Table = contents.parse().context("Failed to parse secrets TOML")?;
 
         let now = Instant::now();
         for (key, value) in &table {
@@ -86,7 +84,11 @@ impl SecretManager {
             }
         }
 
-        info!("Loaded {} secrets from {}", self.cache.len(), self.secrets_path.display());
+        info!(
+            "Loaded {} secrets from {}",
+            self.cache.len(),
+            self.secrets_path.display()
+        );
         Ok(())
     }
 

@@ -120,8 +120,8 @@ fn parse_cpu_usage_macos(top_output: &str) -> f64 {
 
 fn get_cpu_linux() -> Result<(f64, u32, [f64; 3])> {
     // Read /proc/cpuinfo for core count
-    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo")
-        .context("Failed to read /proc/cpuinfo")?;
+    let cpuinfo =
+        std::fs::read_to_string("/proc/cpuinfo").context("Failed to read /proc/cpuinfo")?;
 
     let cores = cpuinfo
         .lines()
@@ -129,8 +129,8 @@ fn get_cpu_linux() -> Result<(f64, u32, [f64; 3])> {
         .count() as u32;
 
     // Read /proc/loadavg for load averages
-    let loadavg = std::fs::read_to_string("/proc/loadavg")
-        .context("Failed to read /proc/loadavg")?;
+    let loadavg =
+        std::fs::read_to_string("/proc/loadavg").context("Failed to read /proc/loadavg")?;
 
     let load_parts: Vec<f64> = loadavg
         .split_whitespace()
@@ -145,8 +145,7 @@ fn get_cpu_linux() -> Result<(f64, u32, [f64; 3])> {
     ];
 
     // Read /proc/stat for CPU usage (two samples, 100ms apart)
-    let stat1 = std::fs::read_to_string("/proc/stat")
-        .context("Failed to read /proc/stat")?;
+    let stat1 = std::fs::read_to_string("/proc/stat").context("Failed to read /proc/stat")?;
     let cpu1 = parse_proc_stat_cpu(&stat1);
 
     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -182,8 +181,7 @@ fn parse_proc_stat_cpu(stat: &str) -> CpuTimes {
             .collect();
 
         let total: u64 = values.iter().sum();
-        let idle = values.get(3).copied().unwrap_or(0)
-            + values.get(4).copied().unwrap_or(0); // idle + iowait
+        let idle = values.get(3).copied().unwrap_or(0) + values.get(4).copied().unwrap_or(0); // idle + iowait
 
         CpuTimes { idle, total }
     } else {

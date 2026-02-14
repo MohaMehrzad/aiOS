@@ -108,8 +108,7 @@ impl GoalEngine {
             )?;
             let rows = stmt.query_map([], |row| {
                 let tags_json: String = row.get(7)?;
-                let tags: Vec<String> =
-                    serde_json::from_str(&tags_json).unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
                 Ok(Goal {
                     id: row.get(0)?,
                     description: row.get(1)?,
@@ -135,7 +134,7 @@ impl GoalEngine {
             let mut stmt = db.prepare(
                 "SELECT id, goal_id, description, assigned_agent, status, intelligence_level, \
                  required_tools, depends_on, input_json, output_json, created_at, started_at, \
-                 completed_at, error FROM tasks ORDER BY created_at ASC"
+                 completed_at, error FROM tasks ORDER BY created_at ASC",
             )?;
             let rows = stmt.query_map([], |row| {
                 let tools_json: String = row.get(6)?;
@@ -159,7 +158,10 @@ impl GoalEngine {
             })?;
             for row in rows {
                 let task = row?;
-                goal_tasks.entry(task.goal_id.clone()).or_default().push(task);
+                goal_tasks
+                    .entry(task.goal_id.clone())
+                    .or_default()
+                    .push(task);
             }
         }
 
@@ -227,7 +229,8 @@ impl GoalEngine {
         };
 
         // Persist to SQLite
-        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+        if let Some(ref db_mutex) = self.db {
+            let db = db_mutex.lock().unwrap();
             db.execute(
                 "INSERT INTO goals (id, description, priority, source, status, created_at, updated_at, tags, metadata_json) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -276,10 +279,7 @@ impl GoalEngine {
             return 0.0;
         }
 
-        let completed = tasks
-            .iter()
-            .filter(|t| t.status == "completed")
-            .count() as f64;
+        let completed = tasks.iter().filter(|t| t.status == "completed").count() as f64;
         let total = tasks.len() as f64;
 
         (completed / total) * 100.0
@@ -296,7 +296,8 @@ impl GoalEngine {
         goal.updated_at = chrono::Utc::now().timestamp();
 
         // Persist
-        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+        if let Some(ref db_mutex) = self.db {
+            let db = db_mutex.lock().unwrap();
             let _ = db.execute(
                 "UPDATE goals SET status = 'cancelled', updated_at = ?1 WHERE id = ?2",
                 rusqlite::params![goal.updated_at, goal_id],
@@ -308,7 +309,8 @@ impl GoalEngine {
             for task in tasks.iter_mut() {
                 if task.status != "completed" {
                     task.status = "cancelled".to_string();
-                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                    if let Some(ref db_mutex) = self.db {
+                        let db = db_mutex.lock().unwrap();
                         let _ = db.execute(
                             "UPDATE tasks SET status = 'cancelled' WHERE id = ?1",
                             rusqlite::params![task.id],
@@ -376,10 +378,13 @@ impl GoalEngine {
     pub fn add_tasks(&mut self, goal_id: &str, tasks: Vec<Task>) {
         if let Some(existing) = self.goal_tasks.get_mut(goal_id) {
             // Persist each task
-            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            if let Some(ref db_mutex) = self.db {
+                let db = db_mutex.lock().unwrap();
                 for t in &tasks {
-                    let tools_json = serde_json::to_string(&t.required_tools).unwrap_or_else(|_| "[]".to_string());
-                    let deps_json = serde_json::to_string(&t.depends_on).unwrap_or_else(|_| "[]".to_string());
+                    let tools_json = serde_json::to_string(&t.required_tools)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    let deps_json =
+                        serde_json::to_string(&t.depends_on).unwrap_or_else(|_| "[]".to_string());
                     let _ = db.execute(
                         "INSERT OR REPLACE INTO tasks (id, goal_id, description, assigned_agent, status, \
                          intelligence_level, required_tools, depends_on, input_json, output_json, \
@@ -404,7 +409,8 @@ impl GoalEngine {
                 if task.id == task_id {
                     task.status = "completed".to_string();
                     task.completed_at = chrono::Utc::now().timestamp();
-                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                    if let Some(ref db_mutex) = self.db {
+                        let db = db_mutex.lock().unwrap();
                         let _ = db.execute(
                             "UPDATE tasks SET status = 'completed', completed_at = ?1 WHERE id = ?2",
                             rusqlite::params![task.completed_at, task_id],
@@ -421,7 +427,8 @@ impl GoalEngine {
         if let Some(goal) = self.goals.get_mut(goal_id) {
             goal.status = status.to_string();
             goal.updated_at = chrono::Utc::now().timestamp();
-            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            if let Some(ref db_mutex) = self.db {
+                let db = db_mutex.lock().unwrap();
                 let _ = db.execute(
                     "UPDATE goals SET status = ?1, updated_at = ?2 WHERE id = ?3",
                     rusqlite::params![status, goal.updated_at, goal_id],
@@ -434,7 +441,8 @@ impl GoalEngine {
     pub fn set_metadata(&mut self, goal_id: &str, metadata: Vec<u8>) {
         if let Some(goal) = self.goals.get_mut(goal_id) {
             goal.metadata_json = metadata.clone();
-            if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+            if let Some(ref db_mutex) = self.db {
+                let db = db_mutex.lock().unwrap();
                 let _ = db.execute(
                     "UPDATE goals SET metadata_json = ?1 WHERE id = ?2",
                     rusqlite::params![metadata, goal_id],
@@ -459,7 +467,8 @@ impl GoalEngine {
         };
 
         // Persist
-        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+        if let Some(ref db_mutex) = self.db {
+            let db = db_mutex.lock().unwrap();
             let _ = db.execute(
                 "INSERT INTO messages (id, goal_id, sender, content, timestamp) VALUES (?1, ?2, ?3, ?4, ?5)",
                 rusqlite::params![msg.id, goal_id, msg.sender, msg.content, msg.timestamp],
@@ -475,10 +484,7 @@ impl GoalEngine {
 
     /// Get all messages for a goal
     pub fn get_messages(&self, goal_id: &str) -> Vec<GoalMessage> {
-        self.goal_messages
-            .get(goal_id)
-            .cloned()
-            .unwrap_or_default()
+        self.goal_messages.get(goal_id).cloned().unwrap_or_default()
     }
 
     /// Get all non-terminal tasks across all goals.
@@ -495,7 +501,8 @@ impl GoalEngine {
                     "in_progress" => {
                         // Was interrupted by restart — reset to pending
                         task.status = "pending".to_string();
-                        if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                        if let Some(ref db_mutex) = self.db {
+                            let db = db_mutex.lock().unwrap();
                             let _ = db.execute(
                                 "UPDATE tasks SET status = 'pending' WHERE id = ?1",
                                 rusqlite::params![task.id],
@@ -516,7 +523,8 @@ impl GoalEngine {
             for task in tasks.iter_mut() {
                 if task.id == task_id {
                     task.status = status.to_string();
-                    if let Some(ref db_mutex) = self.db { let db = db_mutex.lock().unwrap();
+                    if let Some(ref db_mutex) = self.db {
+                        let db = db_mutex.lock().unwrap();
                         let _ = db.execute(
                             "UPDATE tasks SET status = ?1 WHERE id = ?2",
                             rusqlite::params![status, task_id],

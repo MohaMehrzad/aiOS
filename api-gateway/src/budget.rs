@@ -120,9 +120,7 @@ impl BudgetManager {
         let records: Vec<UsageRecord> = self
             .usage_records
             .iter()
-            .filter(|r| {
-                (provider.is_empty() || r.provider == provider) && r.timestamp >= cutoff
-            })
+            .filter(|r| (provider.is_empty() || r.provider == provider) && r.timestamp >= cutoff)
             .cloned()
             .collect();
 
@@ -190,10 +188,7 @@ impl BudgetManager {
 /// Get the Unix timestamp for the start of the current month
 fn current_month_start() -> i64 {
     let now = chrono::Utc::now();
-    let start = now
-        .date_naive()
-        .with_day(1)
-        .unwrap_or(now.date_naive());
+    let start = now.date_naive().with_day(1).unwrap_or(now.date_naive());
     start
         .and_hms_opt(0, 0, 0)
         .map(|dt: chrono::NaiveDateTime| dt.and_utc().timestamp())

@@ -71,11 +71,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn infer_language(file_path: &str) -> String {
-    let ext = file_path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = file_path.rsplit('.').next().unwrap_or("").to_lowercase();
 
     match ext.as_str() {
         "rs" => "rust",

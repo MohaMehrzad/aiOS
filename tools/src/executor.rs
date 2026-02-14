@@ -577,7 +577,11 @@ impl Executor {
 
         // 4. Pre-execution backup if tool is reversible
         let backup_id = if tool_def.reversible {
-            let bid = backup_manager.create_backup(&execution_id, &request.tool_name, &request.input_json);
+            let bid = backup_manager.create_backup(
+                &execution_id,
+                &request.tool_name,
+                &request.input_json,
+            );
             Some(bid)
         } else {
             None

@@ -65,9 +65,7 @@ impl AiRuntime for AIRuntimeService {
             })),
             Err(e) => {
                 error!("UnloadModel failed: {e:#}");
-                Err(Status::internal(format!(
-                    "Failed to unload model: {e:#}"
-                )))
+                Err(Status::internal(format!("Failed to unload model: {e:#}")))
             }
         }
     }
@@ -75,10 +73,7 @@ impl AiRuntime for AIRuntimeService {
     // ------------------------------------------------------------------
     // ListModels
     // ------------------------------------------------------------------
-    async fn list_models(
-        &self,
-        _request: Request<Empty>,
-    ) -> Result<Response<ModelList>, Status> {
+    async fn list_models(&self, _request: Request<Empty>) -> Result<Response<ModelList>, Status> {
         let mgr = self.model_manager.lock().await;
         let models = mgr.list_models();
         info!(count = models.len(), "gRPC ListModels");
@@ -115,8 +110,7 @@ impl AiRuntime for AIRuntimeService {
     // ------------------------------------------------------------------
     // StreamInfer (server-streaming)
     // ------------------------------------------------------------------
-    type StreamInferStream =
-        tokio_stream::wrappers::ReceiverStream<Result<InferChunk, Status>>;
+    type StreamInferStream = tokio_stream::wrappers::ReceiverStream<Result<InferChunk, Status>>;
 
     async fn stream_infer(
         &self,
@@ -141,9 +135,7 @@ impl AiRuntime for AIRuntimeService {
             Ok(stream) => Ok(Response::new(stream)),
             Err(e) => {
                 error!(model = %model_name, "Stream inference failed: {e:#}");
-                Err(Status::internal(format!(
-                    "Stream inference failed: {e:#}"
-                )))
+                Err(Status::internal(format!("Stream inference failed: {e:#}")))
             }
         }
     }
@@ -157,10 +149,7 @@ impl AiRuntime for AIRuntimeService {
     ) -> Result<Response<HealthStatus>, Status> {
         let mgr = self.model_manager.lock().await;
         let models = mgr.list_models();
-        let loaded_count = models
-            .iter()
-            .filter(|m| m.status == "ready")
-            .count();
+        let loaded_count = models.iter().filter(|m| m.status == "ready").count();
         let total_count = models.len();
 
         let uptime = self.start_time.elapsed().as_secs() as i64;
@@ -181,9 +170,7 @@ impl AiRuntime for AIRuntimeService {
         Ok(Response::new(HealthStatus {
             healthy: true,
             service: "aios-runtime".to_string(),
-            message: format!(
-                "{loaded_count}/{total_count} models loaded, uptime {uptime}s"
-            ),
+            message: format!("{loaded_count}/{total_count} models loaded, uptime {uptime}s"),
             uptime_seconds: uptime,
             details,
         }))
@@ -197,10 +184,7 @@ impl AiRuntime for AIRuntimeService {
 impl AIRuntimeService {
     /// Resolve the target model from the request.  Tries the explicit model
     /// name first, then falls back to intelligence-level routing.
-    async fn resolve_model(
-        &self,
-        req: &InferRequest,
-    ) -> Result<(u16, String), Status> {
+    async fn resolve_model(&self, req: &InferRequest) -> Result<(u16, String), Status> {
         let mut mgr = self.model_manager.lock().await;
 
         // 1. Explicit model name.

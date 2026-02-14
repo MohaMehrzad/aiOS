@@ -131,8 +131,7 @@ impl ClaudeClient {
             .collect::<Vec<_>>()
             .join("");
 
-        let tokens_used =
-            claude_response.usage.input_tokens + claude_response.usage.output_tokens;
+        let tokens_used = claude_response.usage.input_tokens + claude_response.usage.output_tokens;
 
         info!(
             "Claude response: {} tokens, {}ms latency",

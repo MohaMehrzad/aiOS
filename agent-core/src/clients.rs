@@ -34,10 +34,14 @@ impl ServiceClients {
             tools_channel: OnceCell::new(),
             memory_channel: OnceCell::new(),
             api_gateway_channel: OnceCell::new(),
-            runtime_addr: std::env::var("AIOS_RUNTIME_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50055".to_string()),
-            tools_addr: std::env::var("AIOS_TOOLS_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50052".to_string()),
-            memory_addr: std::env::var("AIOS_MEMORY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50053".to_string()),
-            api_gateway_addr: std::env::var("AIOS_GATEWAY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50054".to_string()),
+            runtime_addr: std::env::var("AIOS_RUNTIME_ADDR")
+                .unwrap_or_else(|_| "http://127.0.0.1:50055".to_string()),
+            tools_addr: std::env::var("AIOS_TOOLS_ADDR")
+                .unwrap_or_else(|_| "http://127.0.0.1:50052".to_string()),
+            memory_addr: std::env::var("AIOS_MEMORY_ADDR")
+                .unwrap_or_else(|_| "http://127.0.0.1:50053".to_string()),
+            api_gateway_addr: std::env::var("AIOS_GATEWAY_ADDR")
+                .unwrap_or_else(|_| "http://127.0.0.1:50054".to_string()),
             discovery: None,
         }
     }
@@ -113,11 +117,9 @@ impl ServiceClients {
             .tools_channel
             .get_or_try_init(|| Self::connect_with_retry(&self.tools_addr))
             .await?;
-        Ok(
-            proto::tools::tool_registry_client::ToolRegistryClient::new(
-                channel.clone(),
-            ),
-        )
+        Ok(proto::tools::tool_registry_client::ToolRegistryClient::new(
+            channel.clone(),
+        ))
     }
 
     /// Get or create the memory gRPC client
@@ -128,11 +130,7 @@ impl ServiceClients {
             .memory_channel
             .get_or_try_init(|| Self::connect_with_retry(&self.memory_addr))
             .await?;
-        Ok(
-            proto::memory::memory_service_client::MemoryServiceClient::new(
-                channel.clone(),
-            ),
-        )
+        Ok(proto::memory::memory_service_client::MemoryServiceClient::new(channel.clone()))
     }
 
     /// Get or create the api-gateway gRPC client
@@ -143,11 +141,7 @@ impl ServiceClients {
             .api_gateway_channel
             .get_or_try_init(|| Self::connect_with_retry(&self.api_gateway_addr))
             .await?;
-        Ok(
-            proto::api_gateway::api_gateway_client::ApiGatewayClient::new(
-                channel.clone(),
-            ),
-        )
+        Ok(proto::api_gateway::api_gateway_client::ApiGatewayClient::new(channel.clone()))
     }
 }
 

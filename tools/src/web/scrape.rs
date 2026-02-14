@@ -41,7 +41,10 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
 
     // Extract title from <title> tag
     let title = extract_between(&html, "<title>", "</title>")
-        .or_else(|| extract_between(&html, "<title ", ">").and_then(|_| extract_between(&html, ">", "</title>")))
+        .or_else(|| {
+            extract_between(&html, "<title ", ">")
+                .and_then(|_| extract_between(&html, ">", "</title>"))
+        })
         .unwrap_or_default()
         .trim()
         .to_string();
@@ -99,7 +102,10 @@ fn strip_html_tags(html: &str) -> String {
             let ahead: String = lower_chars[i..i + 7].iter().collect();
             if ahead == "<script" {
                 in_script = true;
-            } else if ahead == "<style " || (i + 6 < lower_chars.len() && lower_chars[i..i + 6].iter().collect::<String>() == "<style") {
+            } else if ahead == "<style "
+                || (i + 6 < lower_chars.len()
+                    && lower_chars[i..i + 6].iter().collect::<String>() == "<style")
+            {
                 in_style = true;
             }
         }
@@ -143,7 +149,11 @@ fn strip_html_tags(html: &str) -> String {
 fn extract_by_selector(html: &str, selector: &str) -> String {
     let tag = if selector.starts_with('.') || selector.starts_with('#') {
         // Class or ID selector — search for elements with that attribute
-        let attr_type = if selector.starts_with('.') { "class" } else { "id" };
+        let attr_type = if selector.starts_with('.') {
+            "class"
+        } else {
+            "id"
+        };
         let value = &selector[1..];
         // Find elements with matching attribute
         let pattern = format!("{attr_type}=\"{value}\"");

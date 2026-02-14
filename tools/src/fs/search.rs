@@ -25,10 +25,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         .and_then(|p| p.as_str())
         .ok_or_else(|| anyhow::anyhow!("fs.search: missing required field 'pattern'"))?;
 
-    let max_depth = v
-        .get("max_depth")
-        .and_then(|m| m.as_u64())
-        .unwrap_or(0) as usize;
+    let max_depth = v.get("max_depth").and_then(|m| m.as_u64()).unwrap_or(0) as usize;
 
     // Compile the glob pattern
     let glob = glob_pattern::Pattern::new(pattern)
@@ -67,8 +64,8 @@ mod glob_pattern {
 
     enum Token {
         Literal(char),
-        Any,           // ?
-        AnySequence,   // *
+        Any,                        // ?
+        AnySequence,                // *
         CharClass(Vec<char>, bool), // [abc] or [!abc]
     }
 

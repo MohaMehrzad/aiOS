@@ -106,7 +106,16 @@ fn scan_open_ports() -> ScanFinding {
 
 fn scan_world_writable() -> ScanFinding {
     let details = Command::new("find")
-        .args(["/etc", "/var", "-maxdepth", "3", "-perm", "-o+w", "-type", "f"])
+        .args([
+            "/etc",
+            "/var",
+            "-maxdepth",
+            "3",
+            "-perm",
+            "-o+w",
+            "-type",
+            "f",
+        ])
         .output()
         .ok()
         .map(|o| {
@@ -141,12 +150,7 @@ fn scan_suid_binaries() -> ScanFinding {
         })
         .unwrap_or_default();
 
-    let severity = if details.len() > 20 {
-        "medium"
-    } else {
-        "low"
-    }
-    .to_string();
+    let severity = if details.len() > 20 { "medium" } else { "low" }.to_string();
     ScanFinding {
         check: "suid_binaries".into(),
         severity,

@@ -13,10 +13,10 @@ use tokio::sync::RwLock;
 use tonic::transport::Server;
 use tracing::info;
 
+mod budget;
 mod claude;
 mod openai;
 mod router;
-mod budget;
 
 pub mod proto {
     pub mod common {
@@ -102,27 +102,46 @@ impl ApiGateway for ApiGatewayService {
         tokio::spawn(async move {
             let state = state.write().await;
 
-            let provider = state
-                .request_router
-                .select_provider(&req, &state.claude_client, &state.openai_client, &state.qwen3_client, &state.budget_manager);
+            let provider = state.request_router.select_provider(
+                &req,
+                &state.claude_client,
+                &state.openai_client,
+                &state.qwen3_client,
+                &state.budget_manager,
+            );
 
             let result = match provider.as_str() {
                 "claude" => {
                     state
                         .claude_client
-                        .infer(&req.prompt, &req.system_prompt, req.max_tokens, req.temperature)
+                        .infer(
+                            &req.prompt,
+                            &req.system_prompt,
+                            req.max_tokens,
+                            req.temperature,
+                        )
                         .await
                 }
                 "openai" => {
                     state
                         .openai_client
-                        .infer(&req.prompt, &req.system_prompt, req.max_tokens, req.temperature)
+                        .infer(
+                            &req.prompt,
+                            &req.system_prompt,
+                            req.max_tokens,
+                            req.temperature,
+                        )
                         .await
                 }
                 "qwen3" => {
                     state
                         .qwen3_client
-                        .infer(&req.prompt, &req.system_prompt, req.max_tokens, req.temperature)
+                        .infer(
+                            &req.prompt,
+                            &req.system_prompt,
+                            req.max_tokens,
+                            req.temperature,
+                        )
                         .await
                 }
                 _ => Err(anyhow::anyhow!("No available provider")),
@@ -140,9 +159,7 @@ impl ApiGateway for ApiGatewayService {
                         .await;
                 }
                 Err(e) => {
-                    let _ = tx
-                        .send(Err(tonic::Status::internal(e.to_string())))
-                        .await;
+                    let _ = tx.send(Err(tonic::Status::internal(e.to_string()))).await;
                 }
             }
         });
@@ -188,20 +205,33 @@ async fn main() -> Result<()> {
     let qwen3_key = std::env::var("QWEN3_API_KEY").unwrap_or_default();
 
     // Qwen3 config
-    let qwen3_base_url = std::env::var("QWEN3_BASE_URL")
-        .unwrap_or_else(|_| "https://api.viwoapp.net".to_string());
-    let qwen3_model = std::env::var("QWEN3_MODEL")
-        .unwrap_or_else(|_| "qwen3:30b-128k".to_string());
+    let qwen3_base_url =
+        std::env::var("QWEN3_BASE_URL").unwrap_or_else(|_| "https://api.viwoapp.net".to_string());
+    let qwen3_model = std::env::var("QWEN3_MODEL").unwrap_or_else(|_| "qwen3:30b-128k".to_string());
 
     // OpenAI config
-    let openai_model = std::env::var("OPENAI_MODEL")
-        .unwrap_or_else(|_| "gpt-5".to_string());
+    let openai_model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5".to_string());
 
     let available: Vec<&str> = [
-        if !claude_key.is_empty() { Some("claude") } else { None },
-        if !openai_key.is_empty() { Some("openai") } else { None },
-        if !qwen3_key.is_empty() { Some("qwen3") } else { None },
-    ].iter().filter_map(|x| *x).collect();
+        if !claude_key.is_empty() {
+            Some("claude")
+        } else {
+            None
+        },
+        if !openai_key.is_empty() {
+            Some("openai")
+        } else {
+            None
+        },
+        if !qwen3_key.is_empty() {
+            Some("qwen3")
+        } else {
+            None
+        },
+    ]
+    .iter()
+    .filter_map(|x| *x)
+    .collect();
 
     if available.is_empty() {
         tracing::warn!("No API keys configured — API gateway will reject all requests");
@@ -216,11 +246,7 @@ async fn main() -> Result<()> {
             "https://api.openai.com".to_string(),
             openai_model,
         ),
-        qwen3_client: openai::OpenAiClient::with_config(
-            qwen3_key,
-            qwen3_base_url,
-            qwen3_model,
-        ),
+        qwen3_client: openai::OpenAiClient::with_config(qwen3_key, qwen3_base_url, qwen3_model),
         request_router: router::RequestRouter::new(),
         budget_manager: budget::BudgetManager::new(100.0, 50.0),
     }));

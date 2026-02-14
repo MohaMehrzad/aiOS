@@ -62,30 +62,12 @@ impl OperationalMemory {
     /// Get system snapshot from current metrics
     pub fn get_snapshot(&self) -> SystemSnapshot {
         SystemSnapshot {
-            cpu_percent: self
-                .metrics
-                .get("cpu.usage")
-                .map_or(0.0, |m| m.value),
-            memory_used_mb: self
-                .metrics
-                .get("memory.used_mb")
-                .map_or(0.0, |m| m.value),
-            memory_total_mb: self
-                .metrics
-                .get("memory.total_mb")
-                .map_or(0.0, |m| m.value),
-            disk_used_gb: self
-                .metrics
-                .get("disk.used_gb")
-                .map_or(0.0, |m| m.value),
-            disk_total_gb: self
-                .metrics
-                .get("disk.total_gb")
-                .map_or(0.0, |m| m.value),
-            gpu_utilization: self
-                .metrics
-                .get("gpu.utilization")
-                .map_or(0.0, |m| m.value),
+            cpu_percent: self.metrics.get("cpu.usage").map_or(0.0, |m| m.value),
+            memory_used_mb: self.metrics.get("memory.used_mb").map_or(0.0, |m| m.value),
+            memory_total_mb: self.metrics.get("memory.total_mb").map_or(0.0, |m| m.value),
+            disk_used_gb: self.metrics.get("disk.used_gb").map_or(0.0, |m| m.value),
+            disk_total_gb: self.metrics.get("disk.total_gb").map_or(0.0, |m| m.value),
+            gpu_utilization: self.metrics.get("gpu.utilization").map_or(0.0, |m| m.value),
             active_tasks: self
                 .metrics
                 .get("tasks.active")

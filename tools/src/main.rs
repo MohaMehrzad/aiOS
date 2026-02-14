@@ -11,31 +11,31 @@ use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tracing::{info, warn};
 
-mod registry;
-mod executor;
 mod audit;
 mod backup;
-mod schema;
 pub mod capabilities;
-pub mod secrets;
-pub mod sandbox;
-pub mod firewall_apply;
-pub mod fs;
-pub mod process;
-pub mod service;
-pub mod net;
-pub mod firewall;
-pub mod pkg;
-pub mod sec;
-pub mod monitor;
-pub mod hw;
-pub mod web;
-pub mod git;
 pub mod code;
-pub mod self_update;
-pub mod plugin;
 pub mod container;
 pub mod email;
+mod executor;
+pub mod firewall;
+pub mod firewall_apply;
+pub mod fs;
+pub mod git;
+pub mod hw;
+pub mod monitor;
+pub mod net;
+pub mod pkg;
+pub mod plugin;
+pub mod process;
+mod registry;
+pub mod sandbox;
+mod schema;
+pub mod sec;
+pub mod secrets;
+pub mod self_update;
+pub mod service;
+pub mod web;
 
 pub mod proto {
     pub mod common {
@@ -112,12 +112,7 @@ impl ToolRegistry for ToolRegistryService {
 
         // Execute through the pipeline
         let response = executor
-            .execute(
-                registry,
-                audit_log,
-                backup_manager,
-                req.clone(),
-            )
+            .execute(registry, audit_log, backup_manager, req.clone())
             .await
             .map_err(|e| tonic::Status::internal(format!("Execution failed: {e}")))?;
 
@@ -127,7 +122,10 @@ impl ToolRegistry for ToolRegistryService {
             && response.error.contains("No handler registered")
             && req.tool_name.starts_with("plugin.")
         {
-            let short_name = req.tool_name.strip_prefix("plugin.").unwrap_or(&req.tool_name);
+            let short_name = req
+                .tool_name
+                .strip_prefix("plugin.")
+                .unwrap_or(&req.tool_name);
             let script_path = format!("{}/{}.py", plugin::PLUGIN_DIR, short_name);
 
             if std::path::Path::new(&script_path).exists() {
@@ -153,16 +151,14 @@ impl ToolRegistry for ToolRegistryService {
                             result.success,
                             result.duration_ms as i64,
                         );
-                        return Ok(tonic::Response::new(
-                            proto::tools::ExecuteResponse {
-                                success: result.success,
-                                output_json: result.output,
-                                error: result.error,
-                                execution_id: response.execution_id,
-                                duration_ms: result.duration_ms as i64,
-                                backup_id: String::new(),
-                            },
-                        ));
+                        return Ok(tonic::Response::new(proto::tools::ExecuteResponse {
+                            success: result.success,
+                            output_json: result.output,
+                            error: result.error,
+                            execution_id: response.execution_id,
+                            duration_ms: result.duration_ms as i64,
+                            backup_id: String::new(),
+                        }));
                     }
                     Err(e) => {
                         warn!("Plugin script execution failed: {e}");
@@ -179,7 +175,10 @@ impl ToolRegistry for ToolRegistryService {
 
         // Plugin chaining: if a plugin succeeded, check metadata for next_plugins
         if response.success && req.tool_name.starts_with("plugin.") {
-            let short_name = req.tool_name.strip_prefix("plugin.").unwrap_or(&req.tool_name);
+            let short_name = req
+                .tool_name
+                .strip_prefix("plugin.")
+                .unwrap_or(&req.tool_name);
             let meta_path = format!("{}/{}.meta.json", plugin::PLUGIN_DIR, short_name);
             if let Ok(meta_contents) = std::fs::read_to_string(&meta_path) {
                 if let Ok(meta) = serde_json::from_str::<plugin::PluginMetadata>(&meta_contents) {
@@ -190,10 +189,9 @@ impl ToolRegistry for ToolRegistryService {
                         );
                         let chain_input = if meta.output_mode == "merge" {
                             // Merge: combine original input with output
-                            let mut merged = serde_json::from_slice::<serde_json::Value>(
-                                &req.input_json,
-                            )
-                            .unwrap_or(serde_json::Value::Object(Default::default()));
+                            let mut merged =
+                                serde_json::from_slice::<serde_json::Value>(&req.input_json)
+                                    .unwrap_or(serde_json::Value::Object(Default::default()));
                             if let Ok(output_val) =
                                 serde_json::from_slice::<serde_json::Value>(&response.output_json)
                             {
@@ -282,12 +280,10 @@ impl ToolRegistry for ToolRegistryService {
         let mut state = self.state.lock().await;
         state.registry.register_tool(tool);
 
-        Ok(tonic::Response::new(
-            proto::tools::RegisterToolResponse {
-                accepted: true,
-                error: String::new(),
-            },
-        ))
+        Ok(tonic::Response::new(proto::tools::RegisterToolResponse {
+            accepted: true,
+            error: String::new(),
+        }))
     }
 
     async fn deregister(
