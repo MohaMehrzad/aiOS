@@ -25,7 +25,7 @@ rusqlite = { workspace = true }
 jsonschema = "0.26"
 sha2 = "0.10"
 walkdir = "2"
-nix = { version = "0.29", features = ["fs", "process", "signal", "user"] }
+nix = { version = "0.31", features = ["fs", "process", "signal", "user"] }
 libc = "0.2"
 toml = { workspace = true }
 rcgen = "0.13"
