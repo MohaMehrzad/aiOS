@@ -1,8 +1,32 @@
 # aiOS
 
+[![CI](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://www.python.org/)
+[![GitHub Stars](https://img.shields.io/github/stars/MohaMehrzad/aiOS?style=social)](https://github.com/MohaMehrzad/aiOS)
+
 **A custom Linux distribution where AI agents ARE the operating system.**
 
 aiOS replaces traditional system services with autonomous AI agents. Instead of cron jobs, systemd units, and manual administration, aiOS uses a hierarchy of local and cloud AI models to manage init, scheduling, networking, packages, security, and all system operations autonomously.
+
+> **Why aiOS?** Traditional Linux administration requires deep expertise and constant manual intervention. aiOS eliminates this by making AI the first-class citizen of the OS — every system operation is an AI decision, every service is an autonomous agent, and the system learns and adapts over time.
+
+## Quick Start
+
+```bash
+# Clone the repo
+git clone https://github.com/MohaMehrzad/aiOS.git && cd aiOS
+
+# Build all Rust services
+cargo build --workspace --release
+
+# Run tests
+cargo test --workspace
+
+# Start the system (requires config)
+./scripts/deploy-local.sh
+```
 
 ## Architecture
 
@@ -170,3 +194,15 @@ aiOS uses defense-in-depth with capability-based access control:
 - **Audit trail**: Hash-chained audit log for every tool execution
 - **Budget controls**: Per-provider spending limits for external API calls
 - **Reversible operations**: Pre-execution backups with rollback support
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+- [Open an Issue](https://github.com/MohaMehrzad/aiOS/issues/new/choose) to report bugs or request features
+- [Start a Discussion](https://github.com/MohaMehrzad/aiOS/discussions) for questions and ideas
+- Check the [Roadmap](docs/ROADMAP.md) to see what's planned
+
+## License
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
