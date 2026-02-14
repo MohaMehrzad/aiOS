@@ -80,9 +80,7 @@ fn find_llama_server() -> Result<PathBuf> {
         if path.exists() {
             return Ok(path);
         }
-        warn!(
-            "LLAMA_SERVER_PATH={p} does not exist, falling back to well-known locations"
-        );
+        warn!("LLAMA_SERVER_PATH={p} does not exist, falling back to well-known locations");
     }
 
     // 2. Well-known locations
@@ -223,7 +221,8 @@ impl ModelManager {
 
         // Wait for the health endpoint to come up (up to 120 s for large models).
         let health_url = format!("http://127.0.0.1:{port}/health");
-        let timeout_secs = if managed.path.metadata().map(|m| m.len()).unwrap_or(0) > 2_000_000_000 {
+        let timeout_secs = if managed.path.metadata().map(|m| m.len()).unwrap_or(0) > 2_000_000_000
+        {
             120 // Large models need more startup time on CPU
         } else {
             60
@@ -242,8 +241,7 @@ impl ModelManager {
                     if let Some(ref mut proc) = managed.process {
                         match proc.try_wait() {
                             Ok(Some(exit)) => {
-                                let msg =
-                                    format!("llama-server exited early with status {exit}");
+                                let msg = format!("llama-server exited early with status {exit}");
                                 error!(model = %name, "{msg}");
                                 managed.status = ModelState::Error(msg.clone());
                                 self.models.insert(name.clone(), managed);
@@ -420,8 +418,7 @@ impl ModelManager {
                         }
                     },
                     None => {
-                        model.status =
-                            ModelState::Error("no process handle".to_string());
+                        model.status = ModelState::Error("no process handle".to_string());
                         false
                     }
                 };
@@ -485,7 +482,10 @@ impl ModelManager {
                 None
             }
             _ => {
-                warn!(level, "Unknown intelligence level, falling back to first ready model");
+                warn!(
+                    level,
+                    "Unknown intelligence level, falling back to first ready model"
+                );
                 self.first_ready_model()
             }
         }
@@ -539,10 +539,7 @@ mod tests {
     fn test_model_state_display() {
         assert_eq!(ModelState::Loading.to_string(), "loading");
         assert_eq!(ModelState::Ready.to_string(), "ready");
-        assert_eq!(
-            ModelState::Error("oops".into()).to_string(),
-            "error: oops"
-        );
+        assert_eq!(ModelState::Error("oops".into()).to_string(), "error: oops");
         assert_eq!(ModelState::Unloading.to_string(), "unloading");
     }
 

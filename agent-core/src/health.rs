@@ -68,11 +68,10 @@ impl HealthChecker {
 
         for status in self.services.values_mut() {
             let start = std::time::Instant::now();
-            let healthy =
-                tokio::time::timeout(self.timeout, TcpStream::connect(status.address))
-                    .await
-                    .map(|r| r.is_ok())
-                    .unwrap_or(false);
+            let healthy = tokio::time::timeout(self.timeout, TcpStream::connect(status.address))
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
 
             status.last_check_ms = start.elapsed().as_millis() as u64;
             status.last_checked_at = now;

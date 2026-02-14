@@ -77,8 +77,8 @@ impl EventDispatcher {
                 let config_str: String = row.get(3)?;
                 let config = serde_json::from_str(&config_str).unwrap_or_default();
                 let trigger_type_str: String = row.get(2)?;
-                let trigger_type: TriggerType = serde_json::from_str(&trigger_type_str)
-                    .unwrap_or(TriggerType::Cron {
+                let trigger_type: TriggerType =
+                    serde_json::from_str(&trigger_type_str).unwrap_or(TriggerType::Cron {
                         expression: "0 * * * *".to_string(),
                     });
 
@@ -120,10 +120,7 @@ impl EventDispatcher {
     /// Remove a trigger
     pub fn remove_trigger(&mut self, trigger_id: &str) -> Result<()> {
         let conn = rusqlite::Connection::open(&self.db_path)?;
-        conn.execute(
-            "DELETE FROM plugin_triggers WHERE id = ?1",
-            [trigger_id],
-        )?;
+        conn.execute("DELETE FROM plugin_triggers WHERE id = ?1", [trigger_id])?;
         self.triggers.remove(trigger_id);
         Ok(())
     }
@@ -134,10 +131,7 @@ impl EventDispatcher {
     }
 
     /// Run the event dispatch loop
-    pub async fn run(
-        dispatcher: Arc<RwLock<Self>>,
-        cancel: tokio_util::sync::CancellationToken,
-    ) {
+    pub async fn run(dispatcher: Arc<RwLock<Self>>, cancel: tokio_util::sync::CancellationToken) {
         info!("Plugin event dispatcher started");
         loop {
             tokio::select! {

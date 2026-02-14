@@ -88,11 +88,7 @@ impl BackupManager {
     }
 
     /// Back up a file referenced in the tool input
-    fn backup_file_from_input(
-        &self,
-        input_json: &[u8],
-        backup_id: &str,
-    ) -> Option<PathBuf> {
+    fn backup_file_from_input(&self, input_json: &[u8], backup_id: &str) -> Option<PathBuf> {
         let input: serde_json::Value = serde_json::from_slice(input_json).ok()?;
         let path = input.get("path")?.as_str()?;
 

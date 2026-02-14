@@ -116,8 +116,8 @@ fn get_network_stats_linux(interface: &str) -> Result<Output> {
 }
 
 fn read_sys_stat(path: &str) -> Result<u64> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read {}", path))?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("Failed to read {}", path))?;
 
     content
         .trim()

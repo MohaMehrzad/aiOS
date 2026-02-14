@@ -36,8 +36,7 @@ impl TlsManager {
 
     /// Get certificate paths (creates directory if needed)
     pub fn get_cert_paths(&self) -> Result<TlsCerts> {
-        std::fs::create_dir_all(&self.cert_dir)
-            .context("Failed to create cert directory")?;
+        std::fs::create_dir_all(&self.cert_dir).context("Failed to create cert directory")?;
 
         Ok(TlsCerts {
             ca_cert: self.cert_dir.join("ca.crt"),
@@ -54,7 +53,10 @@ impl TlsManager {
         let certs = self.get_cert_paths()?;
 
         if self.certs_exist() {
-            info!("TLS certificates already exist at {}", self.cert_dir.display());
+            info!(
+                "TLS certificates already exist at {}",
+                self.cert_dir.display()
+            );
             return Ok(certs);
         }
 
@@ -83,18 +85,16 @@ impl TlsManager {
             .context("Failed to self-sign CA cert")?;
 
         // Generate server certificate signed by CA
-        let mut server_params =
-            rcgen::CertificateParams::new(vec![service_name.to_string()])
-                .context("Failed to create server params")?;
+        let mut server_params = rcgen::CertificateParams::new(vec![service_name.to_string()])
+            .context("Failed to create server params")?;
         server_params.is_ca = rcgen::IsCa::NoCa;
         server_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
         server_params.not_after = rcgen::date_time_ymd(2026, 12, 31);
         server_params
             .distinguished_name
             .push(rcgen::DnType::CommonName, service_name);
-        server_params.subject_alt_names = vec![
-            rcgen::SanType::DnsName("localhost".try_into().unwrap()),
-        ];
+        server_params.subject_alt_names =
+            vec![rcgen::SanType::DnsName("localhost".try_into().unwrap())];
         // Add service name as SAN if it's a valid DNS name
         if let Ok(dns_name) = service_name.to_string().try_into() {
             server_params
@@ -109,8 +109,7 @@ impl TlsManager {
             .context("Failed to sign server cert")?;
 
         // Write PEM files
-        std::fs::write(&certs.ca_cert, ca_cert_signed.pem())
-            .context("Failed to write CA cert")?;
+        std::fs::write(&certs.ca_cert, ca_cert_signed.pem()).context("Failed to write CA cert")?;
         std::fs::write(&certs.server_cert, server_cert_signed.pem())
             .context("Failed to write server cert")?;
         std::fs::write(&certs.server_key, server_key.serialize_pem())

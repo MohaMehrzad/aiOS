@@ -86,10 +86,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     // Build message
     let mut builder = Message::builder()
         .from(from_mailbox)
-        .to(input
-            .to
-            .parse()
-            .context("Invalid 'to' address")?)
+        .to(input.to.parse().context("Invalid 'to' address")?)
         .subject(&input.subject);
 
     if !input.reply_to.is_empty() {
@@ -141,10 +138,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         message: format!(
             "Email sent to {}. Server response: {}",
             input.to,
-            response
-                .message()
-                .collect::<Vec<&str>>()
-                .join(" ")
+            response.message().collect::<Vec<&str>>().join(" ")
         ),
         from: config.from_address,
         to: input.to,

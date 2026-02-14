@@ -158,9 +158,7 @@ fn search_apt(query: &str) -> Result<Vec<PackageEntry>> {
 }
 
 fn get_apt_version(name: &str) -> String {
-    let output = Command::new("apt-cache")
-        .args(["policy", name])
-        .output();
+    let output = Command::new("apt-cache").args(["policy", name]).output();
 
     match output {
         Ok(out) => {

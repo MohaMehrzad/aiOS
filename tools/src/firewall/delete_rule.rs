@@ -100,7 +100,11 @@ fn delete_nft_rule(chain: &str, index: u32) -> Result<bool> {
     for line in stdout.lines() {
         let trimmed = line.trim();
         // Rule lines contain "# handle N" at the end
-        if trimmed.contains("# handle ") && !trimmed.starts_with("chain ") && !trimmed.starts_with("type ") && !trimmed.starts_with("policy ") {
+        if trimmed.contains("# handle ")
+            && !trimmed.starts_with("chain ")
+            && !trimmed.starts_with("type ")
+            && !trimmed.starts_with("policy ")
+        {
             if rule_count == index {
                 // Extract handle number
                 if let Some(handle_str) = trimmed.rsplit("# handle ").next() {

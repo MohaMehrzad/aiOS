@@ -65,8 +65,8 @@ async fn main() -> Result<()> {
     // Auto-load models found in the model directory
     {
         let mut mgr = model_manager.lock().await;
-        let model_dir = std::env::var("AIOS_MODEL_DIR")
-            .unwrap_or_else(|_| "/var/lib/aios/models/".to_string());
+        let model_dir =
+            std::env::var("AIOS_MODEL_DIR").unwrap_or_else(|_| "/var/lib/aios/models/".to_string());
         let model_path = std::path::Path::new(&model_dir);
 
         if model_path.exists() {
@@ -75,7 +75,8 @@ async fn main() -> Result<()> {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
-                        let file_name = path.file_stem()
+                        let file_name = path
+                            .file_stem()
                             .and_then(|s| s.to_str())
                             .unwrap_or("unknown")
                             .to_string();

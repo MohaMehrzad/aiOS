@@ -51,9 +51,7 @@ impl DecisionLogger {
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
 
-        info!(
-            "Decision [{id}]: context={context}, chosen={chosen}, reason={reasoning}"
-        );
+        info!("Decision [{id}]: context={context}, chosen={chosen}, reason={reasoning}");
 
         let record = DecisionRecord {
             id: id.clone(),

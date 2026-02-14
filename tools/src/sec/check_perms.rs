@@ -57,9 +57,7 @@ fn get_username(uid: u32) -> String {
         .output();
 
     match output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => uid.to_string(),
     }
 }
@@ -69,7 +67,13 @@ fn get_groupname(gid: u32) -> String {
     // On macOS, use dscl or a stat-based approach
     let output = if cfg!(target_os = "macos") {
         std::process::Command::new("dscl")
-            .args([".", "-search", "/Groups", "PrimaryGroupID", &gid.to_string()])
+            .args([
+                ".",
+                "-search",
+                "/Groups",
+                "PrimaryGroupID",
+                &gid.to_string(),
+            ])
             .output()
     } else {
         std::process::Command::new("getent")

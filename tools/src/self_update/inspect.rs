@@ -167,10 +167,7 @@ pub fn execute_health(input: &[u8]) -> Result<Vec<u8>> {
 
     // Check disk space
     let (disk_ok, disk_usage_percent) = if input.check_disk {
-        let output = Command::new("df")
-            .args(["-h", "/"])
-            .output()
-            .ok();
+        let output = Command::new("df").args(["-h", "/"]).output().ok();
 
         if let Some(output) = output {
             let text = String::from_utf8_lossy(&output.stdout).to_string();

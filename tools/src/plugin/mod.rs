@@ -6,10 +6,10 @@
 //! that receives/returns JSON via stdin/stdout.
 
 pub mod create;
-pub mod manage;
 pub mod events;
-pub mod triggers;
+pub mod manage;
 pub mod templates;
+pub mod triggers;
 pub mod validate;
 
 use crate::registry::{make_tool, Registry};
@@ -107,7 +107,10 @@ pub fn register_tools(reg: &mut Registry) {
 pub fn scan_and_register_plugins(reg: &mut Registry) {
     let plugin_dir = std::path::Path::new(PLUGIN_DIR);
     if !plugin_dir.exists() {
-        info!("Plugin directory {} does not exist, skipping scan", PLUGIN_DIR);
+        info!(
+            "Plugin directory {} does not exist, skipping scan",
+            PLUGIN_DIR
+        );
         return;
     }
 
@@ -135,10 +138,7 @@ pub fn scan_and_register_plugins(reg: &mut Registry) {
                             &meta.tool_name,
                             "plugin",
                             &meta.description,
-                            meta.capabilities
-                                .iter()
-                                .map(|s| s.as_str())
-                                .collect(),
+                            meta.capabilities.iter().map(|s| s.as_str()).collect(),
                             "medium",
                             false,
                             false,
@@ -164,9 +164,7 @@ pub fn scan_and_register_plugins(reg: &mut Registry) {
 
 /// Start a filesystem watcher on PLUGIN_DIR for hot-reload of plugins.
 /// When a .meta.json file is created or modified, re-scan and register plugins.
-pub fn start_hot_reload_watcher(
-    registry: Arc<Mutex<Registry>>,
-) -> Option<RecommendedWatcher> {
+pub fn start_hot_reload_watcher(registry: Arc<Mutex<Registry>>) -> Option<RecommendedWatcher> {
     let plugin_dir = std::path::Path::new(PLUGIN_DIR);
     if !plugin_dir.exists() {
         if let Err(e) = std::fs::create_dir_all(plugin_dir) {
@@ -176,15 +174,17 @@ pub fn start_hot_reload_watcher(
     }
 
     let reg = registry.clone();
-    let mut watcher = match notify::recommended_watcher(
-        move |res: Result<Event, notify::Error>| match res {
+    let mut watcher =
+        match notify::recommended_watcher(move |res: Result<Event, notify::Error>| match res {
             Ok(event) => {
-                let dominated_by_meta = event.paths.iter().any(|p| {
-                    p.to_str().map_or(false, |s| s.ends_with(".meta.json"))
-                });
-                let dominated_by_py = event.paths.iter().any(|p| {
-                    p.to_str().map_or(false, |s| s.ends_with(".py"))
-                });
+                let dominated_by_meta = event
+                    .paths
+                    .iter()
+                    .any(|p| p.to_str().map_or(false, |s| s.ends_with(".meta.json")));
+                let dominated_by_py = event
+                    .paths
+                    .iter()
+                    .any(|p| p.to_str().map_or(false, |s| s.ends_with(".py")));
 
                 if dominated_by_meta || dominated_by_py {
                     match event.kind {
@@ -202,14 +202,13 @@ pub fn start_hot_reload_watcher(
             Err(e) => {
                 warn!("Plugin hot-reload watcher error: {e}");
             }
-        },
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            warn!("Failed to create plugin hot-reload watcher: {e}");
-            return None;
-        }
-    };
+        }) {
+            Ok(w) => w,
+            Err(e) => {
+                warn!("Failed to create plugin hot-reload watcher: {e}");
+                return None;
+            }
+        };
 
     if let Err(e) = watcher.watch(plugin_dir, RecursiveMode::NonRecursive) {
         warn!("Failed to watch plugin directory: {e}");

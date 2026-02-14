@@ -34,9 +34,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     // Create parent directories for destination
     if let Some(parent) = Path::new(destination).parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("fs.copy: cannot create parent dirs for {destination}")
-            })?;
+            fs::create_dir_all(parent)
+                .with_context(|| format!("fs.copy: cannot create parent dirs for {destination}"))?;
         }
     }
 
@@ -45,9 +44,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
             format!("fs.copy: failed to copy directory {source} -> {destination}")
         })?;
     } else {
-        fs::copy(source, destination).with_context(|| {
-            format!("fs.copy: failed to copy {source} -> {destination}")
-        })?;
+        fs::copy(source, destination)
+            .with_context(|| format!("fs.copy: failed to copy {source} -> {destination}"))?;
     }
 
     let output = json!({ "copied": true });

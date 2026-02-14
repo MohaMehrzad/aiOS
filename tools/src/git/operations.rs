@@ -178,7 +178,11 @@ struct CommitOutput {
 pub fn execute_commit(input: &[u8]) -> Result<Vec<u8>> {
     let input: CommitInput = serde_json::from_slice(input).context("Invalid JSON input")?;
 
-    let mut args = vec!["commit".to_string(), "-m".to_string(), input.message.clone()];
+    let mut args = vec![
+        "commit".to_string(),
+        "-m".to_string(),
+        input.message.clone(),
+    ];
 
     if !input.author.is_empty() {
         args.push("--author".to_string());
@@ -443,11 +447,7 @@ pub fn execute_status(input: &[u8]) -> Result<Vec<u8>> {
 
     for line in text.lines() {
         if line.starts_with("## ") {
-            branch = line[3..]
-                .split("...")
-                .next()
-                .unwrap_or("")
-                .to_string();
+            branch = line[3..].split("...").next().unwrap_or("").to_string();
             continue;
         }
         if line.len() < 4 {

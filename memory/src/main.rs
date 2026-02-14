@@ -12,11 +12,11 @@ use tokio::sync::RwLock;
 use tonic::transport::Server;
 use tracing::info;
 
+mod knowledge;
+mod longterm;
+mod migration;
 mod operational;
 mod working;
-mod longterm;
-mod knowledge;
-mod migration;
 
 pub mod proto {
     pub mod common {
@@ -267,7 +267,12 @@ impl MemoryService for MemoryServiceImpl {
         let state = self.state.read().await;
         let results = state
             .longterm
-            .semantic_search(&req.query, &req.collections, req.n_results, req.min_relevance)
+            .semantic_search(
+                &req.query,
+                &req.collections,
+                req.n_results,
+                req.min_relevance,
+            )
             .map_err(|e| tonic::Status::internal(format!("Semantic search failed: {e}")))?;
         Ok(tonic::Response::new(proto::memory::SearchResults {
             results,
@@ -461,7 +466,11 @@ impl MemoryService for MemoryServiceImpl {
         }
 
         // Sort by relevance
-        chunks.sort_by(|a, b| b.relevance.partial_cmp(&a.relevance).unwrap_or(std::cmp::Ordering::Equal));
+        chunks.sort_by(|a, b| {
+            b.relevance
+                .partial_cmp(&a.relevance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         Ok(tonic::Response::new(proto::memory::ContextResponse {
             chunks,

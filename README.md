@@ -1,9 +1,12 @@
 # aiOS
 
 [![CI](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/MohaMehrzad/aiOS/actions/workflows/audit.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/audit.yml)
+[![CodeQL](https://github.com/MohaMehrzad/aiOS/actions/workflows/codeql.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://www.python.org/)
+[![GitHub Discussions](https://img.shields.io/github/discussions/MohaMehrzad/aiOS)](https://github.com/MohaMehrzad/aiOS/discussions)
 [![GitHub Stars](https://img.shields.io/github/stars/MohaMehrzad/aiOS?style=social)](https://github.com/MohaMehrzad/aiOS)
 
 **A custom Linux distribution where AI agents ARE the operating system.**
@@ -202,6 +205,7 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 - [Open an Issue](https://github.com/MohaMehrzad/aiOS/issues/new/choose) to report bugs or request features
 - [Start a Discussion](https://github.com/MohaMehrzad/aiOS/discussions) for questions and ideas
 - Check the [Roadmap](docs/ROADMAP.md) to see what's planned
+- Read the [Security Policy](SECURITY.md) for vulnerability reporting
 
 ## License
 

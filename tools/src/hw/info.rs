@@ -44,7 +44,9 @@ fn get_hw_info_macos() -> Result<Output> {
         .output()
         .context("Failed to get CPU info")?;
 
-    let cpu = String::from_utf8_lossy(&cpu_output.stdout).trim().to_string();
+    let cpu = String::from_utf8_lossy(&cpu_output.stdout)
+        .trim()
+        .to_string();
 
     // If the above fails (e.g., on Apple Silicon), try the chip name
     let cpu = if cpu.is_empty() {
@@ -129,9 +131,7 @@ fn get_gpu_macos() -> String {
             let stdout = String::from_utf8_lossy(&out.stdout);
             for line in stdout.lines() {
                 let trimmed = line.trim();
-                if trimmed.starts_with("Chipset Model:")
-                    || trimmed.starts_with("Chip:")
-                {
+                if trimmed.starts_with("Chipset Model:") || trimmed.starts_with("Chip:") {
                     return trimmed
                         .split(':')
                         .nth(1)
@@ -171,10 +171,7 @@ fn get_storage_macos() -> Result<Vec<StorageDevice>> {
             // Get size for this disk
             let size_gb = get_disk_size_macos(&name);
 
-            devices.push(StorageDevice {
-                name,
-                size_gb,
-            });
+            devices.push(StorageDevice { name, size_gb });
         }
     }
 
@@ -202,9 +199,7 @@ fn get_storage_macos() -> Result<Vec<StorageDevice>> {
 }
 
 fn get_disk_size_macos(disk: &str) -> f64 {
-    let output = Command::new("diskutil")
-        .args(["info", disk])
-        .output();
+    let output = Command::new("diskutil").args(["info", disk]).output();
 
     match output {
         Ok(out) => {

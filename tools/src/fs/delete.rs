@@ -38,8 +38,9 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
             fs::remove_dir_all(path)
                 .with_context(|| format!("fs.delete: failed to recursively remove {path}"))?;
         } else {
-            fs::remove_dir(path)
-                .with_context(|| format!("fs.delete: failed to remove directory {path} (is it empty?)"))?;
+            fs::remove_dir(path).with_context(|| {
+                format!("fs.delete: failed to remove directory {path} (is it empty?)")
+            })?;
         }
     } else {
         fs::remove_file(path)

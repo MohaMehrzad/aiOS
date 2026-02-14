@@ -71,8 +71,7 @@ impl OpenAiClient {
     pub fn new(api_key: String) -> Self {
         let base_url = std::env::var("OPENAI_BASE_URL")
             .unwrap_or_else(|_| "https://api.openai.com".to_string());
-        let model = std::env::var("OPENAI_MODEL")
-            .unwrap_or_else(|_| "gpt-4o".to_string());
+        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
             client: reqwest::Client::builder()

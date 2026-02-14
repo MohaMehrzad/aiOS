@@ -27,8 +27,8 @@ struct Output {
 pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     let input: Input = serde_json::from_slice(input).context("Invalid JSON input")?;
 
-    let payload_str = serde_json::to_string(&input.payload)
-        .context("Failed to serialize webhook payload")?;
+    let payload_str =
+        serde_json::to_string(&input.payload).context("Failed to serialize webhook payload")?;
 
     let mut args = vec![
         "-s".to_string(),

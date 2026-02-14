@@ -26,9 +26,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     // Create parent directories for the link if they don't exist
     if let Some(parent) = Path::new(link).parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("fs.symlink: cannot create parent dirs for {link}")
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("fs.symlink: cannot create parent dirs for {link}"))?;
         }
     }
 

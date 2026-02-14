@@ -58,7 +58,9 @@ impl RequestRouter {
         };
 
         // Try primary provider
-        let response = self.try_provider(&provider, request, claude, openai, qwen3, budget).await;
+        let response = self
+            .try_provider(&provider, request, claude, openai, qwen3, budget)
+            .await;
 
         let response = match response {
             Ok(r) => Ok(r),
@@ -67,7 +69,10 @@ impl RequestRouter {
                 let mut last_err = e;
                 let mut success = None;
                 for fb in &fallback_order {
-                    match self.try_provider(fb, request, claude, openai, qwen3, budget).await {
+                    match self
+                        .try_provider(fb, request, claude, openai, qwen3, budget)
+                        .await
+                    {
                         Ok(r) => {
                             info!("Fallback to {fb} succeeded");
                             success = Some(r);
@@ -105,7 +110,14 @@ impl RequestRouter {
                 if !claude.is_available() {
                     bail!("Claude API key not configured");
                 }
-                let r = claude.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                let r = claude
+                    .infer(
+                        &request.prompt,
+                        &request.system_prompt,
+                        request.max_tokens,
+                        request.temperature,
+                    )
+                    .await?;
                 budget.record_usage("claude", r.tokens_used, &r.model_used);
                 Ok(r)
             }
@@ -113,7 +125,14 @@ impl RequestRouter {
                 if !openai.is_available() {
                     bail!("OpenAI API key not configured");
                 }
-                let r = openai.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                let r = openai
+                    .infer(
+                        &request.prompt,
+                        &request.system_prompt,
+                        request.max_tokens,
+                        request.temperature,
+                    )
+                    .await?;
                 budget.record_usage("openai", r.tokens_used, &r.model_used);
                 Ok(r)
             }
@@ -121,7 +140,14 @@ impl RequestRouter {
                 if !qwen3.is_available() {
                     bail!("Qwen3 API key not configured");
                 }
-                let r = qwen3.infer(&request.prompt, &request.system_prompt, request.max_tokens, request.temperature).await?;
+                let r = qwen3
+                    .infer(
+                        &request.prompt,
+                        &request.system_prompt,
+                        request.max_tokens,
+                        request.temperature,
+                    )
+                    .await?;
                 budget.record_usage("qwen3", r.tokens_used, &r.model_used);
                 Ok(r)
             }
@@ -203,11 +229,7 @@ fn hash_request(prompt: &str, system_prompt: &str) -> u64 {
 mod tests {
     use super::*;
 
-    fn make_request(
-        prompt: &str,
-        preferred: &str,
-        allow_fallback: bool,
-    ) -> ApiInferRequest {
+    fn make_request(prompt: &str, preferred: &str, allow_fallback: bool) -> ApiInferRequest {
         ApiInferRequest {
             prompt: prompt.to_string(),
             system_prompt: String::new(),
@@ -222,8 +244,16 @@ mod tests {
 
     fn make_clients() -> (ClaudeClient, OpenAiClient, OpenAiClient) {
         let claude = ClaudeClient::new("test-claude-key".into());
-        let openai = OpenAiClient::with_config("test-openai-key".into(), "https://api.openai.com".into(), "gpt-5".into());
-        let qwen3 = OpenAiClient::with_config("test-qwen3-key".into(), "https://api.viwoapp.net".into(), "qwen3:30b-128k".into());
+        let openai = OpenAiClient::with_config(
+            "test-openai-key".into(),
+            "https://api.openai.com".into(),
+            "gpt-5".into(),
+        );
+        let qwen3 = OpenAiClient::with_config(
+            "test-qwen3-key".into(),
+            "https://api.viwoapp.net".into(),
+            "qwen3:30b-128k".into(),
+        );
         (claude, openai, qwen3)
     }
 

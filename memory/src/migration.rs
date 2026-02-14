@@ -66,8 +66,8 @@ impl MigrationPipeline {
         _longterm_conn: &rusqlite::Connection,
     ) -> Result<MigrationResult> {
         let mut result = MigrationResult::default();
-        let cutoff = chrono::Utc::now().timestamp()
-            - (self.policy.working_to_longterm_hours as i64 * 3600);
+        let cutoff =
+            chrono::Utc::now().timestamp() - (self.policy.working_to_longterm_hours as i64 * 3600);
 
         // 1. Find completed goals older than retention period
         let mut stmt = working_conn.prepare(
@@ -97,9 +97,7 @@ impl MigrationPipeline {
                 "SELECT id FROM tasks WHERE goal_id = ?1 AND status IN ('completed', 'failed')",
             )?;
             let task_count: u32 = task_stmt
-                .query_map(rusqlite::params![goal_id], |row| {
-                    row.get::<_, String>(0)
-                })?
+                .query_map(rusqlite::params![goal_id], |row| row.get::<_, String>(0))?
                 .count() as u32;
             result.tasks_migrated += task_count;
 
@@ -132,15 +130,9 @@ impl MigrationPipeline {
     }
 
     /// Prune old patterns that have low success rates
-    pub fn prune_patterns(
-        &self,
-        working_conn: &rusqlite::Connection,
-    ) -> Result<u32> {
-        let count: u32 = working_conn.query_row(
-            "SELECT COUNT(*) FROM patterns",
-            [],
-            |row| row.get(0),
-        )?;
+    pub fn prune_patterns(&self, working_conn: &rusqlite::Connection) -> Result<u32> {
+        let count: u32 =
+            working_conn.query_row("SELECT COUNT(*) FROM patterns", [], |row| row.get(0))?;
 
         if count as usize <= self.policy.max_patterns {
             return Ok(0);
@@ -305,7 +297,9 @@ mod tests {
         let longterm = rusqlite::Connection::open_in_memory().unwrap();
         let pipeline = MigrationPipeline::new(RetentionPolicy::default());
 
-        let result = pipeline.migrate_working_to_longterm(&working, &longterm).unwrap();
+        let result = pipeline
+            .migrate_working_to_longterm(&working, &longterm)
+            .unwrap();
         assert_eq!(result.goals_migrated, 0);
         assert_eq!(result.tasks_migrated, 0);
     }
@@ -339,7 +333,9 @@ mod tests {
             ..Default::default()
         });
 
-        let result = pipeline.migrate_working_to_longterm(&working, &longterm).unwrap();
+        let result = pipeline
+            .migrate_working_to_longterm(&working, &longterm)
+            .unwrap();
         assert_eq!(result.goals_migrated, 1);
         assert_eq!(result.tasks_migrated, 1);
         assert_eq!(result.procedures_extracted, 1);
@@ -371,7 +367,9 @@ mod tests {
             ..Default::default()
         });
 
-        let result = pipeline.migrate_working_to_longterm(&working, &longterm).unwrap();
+        let result = pipeline
+            .migrate_working_to_longterm(&working, &longterm)
+            .unwrap();
         assert_eq!(result.goals_migrated, 0); // Too recent
     }
 

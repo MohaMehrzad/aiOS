@@ -79,7 +79,11 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         args.push(input.body);
 
         // Default content-type if not set
-        if !input.headers.keys().any(|k| k.to_lowercase() == "content-type") {
+        if !input
+            .headers
+            .keys()
+            .any(|k| k.to_lowercase() == "content-type")
+        {
             args.push("-H".to_string());
             args.push("Content-Type: application/json".to_string());
         }

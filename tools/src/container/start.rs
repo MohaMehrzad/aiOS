@@ -16,8 +16,7 @@ struct StartOutput {
 }
 
 pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
-    let req: StartInput =
-        serde_json::from_slice(input).context("Invalid container.start input")?;
+    let req: StartInput = serde_json::from_slice(input).context("Invalid container.start input")?;
 
     let output = Command::new("podman")
         .args(["start", &req.name])

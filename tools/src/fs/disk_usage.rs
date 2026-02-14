@@ -27,8 +27,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         .and_then(|p| p.as_str())
         .ok_or_else(|| anyhow::anyhow!("fs.disk_usage: missing required field 'path'"))?;
 
-    let stat = statvfs(path)
-        .with_context(|| format!("fs.disk_usage: statvfs failed for {path}"))?;
+    let stat =
+        statvfs(path).with_context(|| format!("fs.disk_usage: statvfs failed for {path}"))?;
 
     let block_size = stat.fragment_size() as u64;
     let total_bytes = stat.blocks() as u64 * block_size;

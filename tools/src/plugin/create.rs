@@ -109,8 +109,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     };
 
     // Write metadata
-    let meta_json = serde_json::to_string_pretty(&metadata)
-        .context("Failed to serialize plugin metadata")?;
+    let meta_json =
+        serde_json::to_string_pretty(&metadata).context("Failed to serialize plugin metadata")?;
     std::fs::write(&metadata_path, &meta_json)
         .with_context(|| format!("Failed to write plugin metadata to {metadata_path}"))?;
 
@@ -119,7 +119,10 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         match install_pip_deps(&req.dependencies) {
             Ok(_) => true,
             Err(e) => {
-                tracing::warn!("Failed to install dependencies for plugin {}: {e}", req.name);
+                tracing::warn!(
+                    "Failed to install dependencies for plugin {}: {e}",
+                    req.name
+                );
                 false
             }
         }
@@ -258,9 +261,10 @@ fn install_pip_deps(packages: &[String]) -> Result<()> {
 
     // Validate package names — only allow alphanumeric, dash, underscore, dot, brackets, comparison ops
     for pkg in packages {
-        if !pkg.chars().all(|c| {
-            c.is_alphanumeric() || "-_.[]>=<!, ".contains(c)
-        }) {
+        if !pkg
+            .chars()
+            .all(|c| c.is_alphanumeric() || "-_.[]>=<!, ".contains(c))
+        {
             bail!("Invalid package name: {pkg}");
         }
     }

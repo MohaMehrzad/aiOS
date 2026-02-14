@@ -109,7 +109,10 @@ impl WorkingMemory {
     // --- Goals ---
 
     pub fn store_goal(&self, goal: &GoalRecord) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO goals (id, description, status, priority, created_at, completed_at, result, metadata_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -128,7 +131,10 @@ impl WorkingMemory {
     }
 
     pub fn update_goal(&self, update: &GoalUpdate) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "UPDATE goals SET status = ?1, result = ?2 WHERE id = ?3",
             params![update.status, update.result, update.id],
@@ -137,7 +143,10 @@ impl WorkingMemory {
     }
 
     pub fn get_active_goals(&self) -> Result<Vec<GoalRecord>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, description, status, priority, created_at, completed_at, result, metadata_json
              FROM goals WHERE status NOT IN ('completed', 'failed', 'cancelled')
@@ -165,7 +174,10 @@ impl WorkingMemory {
     // --- Tasks ---
 
     pub fn store_task(&self, task: &TaskRecord) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO tasks (id, goal_id, description, agent, status, input_json, output_json, started_at, completed_at, duration_ms, error)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -187,7 +199,10 @@ impl WorkingMemory {
     }
 
     pub fn get_tasks_for_goal(&self, goal_id: &str) -> Result<Vec<TaskRecord>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT id, goal_id, description, agent, status, input_json, output_json, started_at, completed_at, duration_ms, error
              FROM tasks WHERE goal_id = ?1 ORDER BY started_at ASC",
@@ -217,7 +232,10 @@ impl WorkingMemory {
     // --- Tool Calls ---
 
     pub fn store_tool_call(&self, record: &ToolCallRecord) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT INTO tool_calls (id, task_id, tool_name, agent, input_json, output_json, success, duration_ms, reason, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -240,7 +258,10 @@ impl WorkingMemory {
     // --- Decisions ---
 
     pub fn store_decision(&self, decision: &Decision) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT INTO decisions (id, context, options_json, chosen, reasoning, intelligence_level, model_used, outcome, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -262,7 +283,10 @@ impl WorkingMemory {
     // --- Patterns ---
 
     pub fn store_pattern(&self, pattern: &Pattern) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO patterns (id, trigger, action, success_rate, uses, last_used, created_from)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -280,7 +304,10 @@ impl WorkingMemory {
     }
 
     pub fn find_pattern(&self, trigger: &str, min_success_rate: f64) -> Result<PatternResult> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let result = conn.query_row(
             "SELECT id, trigger, action, success_rate, uses, last_used, created_from
              FROM patterns WHERE trigger LIKE ?1 AND success_rate >= ?2
@@ -313,7 +340,10 @@ impl WorkingMemory {
     }
 
     pub fn update_pattern_stats(&self, id: &str, success: bool) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let now = chrono::Utc::now().timestamp();
 
         // Update uses count and recalculate success rate
@@ -354,7 +384,10 @@ impl WorkingMemory {
             return Ok(());
         }
 
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let pattern_id = uuid::Uuid::new_v4().to_string();
         let action = tool_sequence.join(" → ");
         let now = chrono::Utc::now().timestamp();
@@ -363,7 +396,10 @@ impl WorkingMemory {
         let existing: Option<String> = conn
             .query_row(
                 "SELECT id FROM patterns WHERE trigger LIKE ?1 AND action = ?2 LIMIT 1",
-                params![format!("%{}%", &goal_description[..goal_description.len().min(50)]), &action],
+                params![
+                    format!("%{}%", &goal_description[..goal_description.len().min(50)]),
+                    &action
+                ],
                 |row| row.get(0),
             )
             .ok();
@@ -390,7 +426,10 @@ impl WorkingMemory {
 
     /// Get tool sequence used for a completed goal
     pub fn get_tool_sequence_for_goal(&self, goal_id: &str) -> Result<Vec<String>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT tool_name FROM tool_calls
              WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?1)
@@ -408,7 +447,10 @@ impl WorkingMemory {
     // --- Agent State ---
 
     pub fn store_agent_state(&self, state: &AgentState) -> Result<()> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         conn.execute(
             "INSERT OR REPLACE INTO agent_states (agent_name, state_json, updated_at)
              VALUES (?1, ?2, ?3)",
@@ -418,7 +460,10 @@ impl WorkingMemory {
     }
 
     pub fn get_agent_state(&self, agent_name: &str) -> Result<AgentState> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
         let state = conn.query_row(
             "SELECT agent_name, state_json, updated_at FROM agent_states WHERE agent_name = ?1",
             params![agent_name],

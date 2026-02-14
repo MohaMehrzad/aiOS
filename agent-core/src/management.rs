@@ -5,17 +5,17 @@
 //! Chat endpoint for direct AI interaction.
 //! Runs on port 9090 alongside the gRPC server.
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use axum::{
-    extract::{Path, State},
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::health::HealthChecker;
@@ -269,7 +269,8 @@ async fn post_goal_message(
 
     for task_id in &awaiting_tasks {
         s.task_planner.resume_task(task_id);
-        s.goal_engine.update_task_status(&goal_id, task_id, "pending");
+        s.goal_engine
+            .update_task_status(&goal_id, task_id, "pending");
     }
 
     if !awaiting_tasks.is_empty() {
@@ -322,16 +323,23 @@ async fn build_system_context(state: &MgmtState) -> String {
 
     for svc in &health_status {
         let status = if svc.healthy { "HEALTHY" } else { "UNHEALTHY" };
-        context.push_str(&format!("- {} — {} ({}ms latency)\n", svc.name, status, svc.last_check_ms));
+        context.push_str(&format!(
+            "- {} — {} ({}ms latency)\n",
+            svc.name, status, svc.last_check_ms
+        ));
     }
 
     // Add registered agents
     if !agents.is_empty() {
         context.push_str("\n## Registered Agents\n");
         for a in &agents {
-            context.push_str(&format!("- {} (type: {}, status: {}, capabilities: {})\n",
-                a.agent_id, a.agent_type, a.status,
-                a.capabilities.join(", ")));
+            context.push_str(&format!(
+                "- {} (type: {}, status: {}, capabilities: {})\n",
+                a.agent_id,
+                a.agent_type,
+                a.status,
+                a.capabilities.join(", ")
+            ));
         }
     }
 
@@ -339,18 +347,30 @@ async fn build_system_context(state: &MgmtState) -> String {
     if !all_goals.is_empty() {
         context.push_str("\n## Goal History (all goals in memory)\n");
         for goal in &all_goals {
-            context.push_str(&format!("\n### Goal [{}] — Status: {}, Priority: {}\n",
-                &goal.id[..8.min(goal.id.len())], goal.status, goal.priority));
+            context.push_str(&format!(
+                "\n### Goal [{}] — Status: {}, Priority: {}\n",
+                &goal.id[..8.min(goal.id.len())],
+                goal.status,
+                goal.priority
+            ));
             context.push_str(&format!("Description: {}\n", goal.description));
-            context.push_str(&format!("Source: {}, Created: {}\n", goal.source, goal.created_at));
+            context.push_str(&format!(
+                "Source: {}, Created: {}\n",
+                goal.source, goal.created_at
+            ));
 
             // Get tasks for this goal
             if let Ok((_g, tasks)) = s.goal_engine.get_goal_with_tasks(&goal.id).await {
                 if !tasks.is_empty() {
                     context.push_str("Tasks:\n");
                     for task in &tasks {
-                        context.push_str(&format!("  - [{}] {} — status: {}, level: {}\n",
-                            &task.id[..8.min(task.id.len())], task.description, task.status, task.intelligence_level));
+                        context.push_str(&format!(
+                            "  - [{}] {} — status: {}, level: {}\n",
+                            &task.id[..8.min(task.id.len())],
+                            task.description,
+                            task.status,
+                            task.intelligence_level
+                        ));
                         // Include AI output if available
                         let output = String::from_utf8_lossy(&task.output_json);
                         if !output.is_empty() {
@@ -358,7 +378,11 @@ async fn build_system_context(state: &MgmtState) -> String {
                             if !ai_text.is_empty() && ai_text.len() > 2 {
                                 // Truncate very long outputs to save tokens
                                 let truncated = if ai_text.len() > 1500 {
-                                    format!("{}... [truncated, {} chars total]", &ai_text[..1500], ai_text.len())
+                                    format!(
+                                        "{}... [truncated, {} chars total]",
+                                        &ai_text[..1500],
+                                        ai_text.len()
+                                    )
                                 } else {
                                     ai_text
                                 };
@@ -526,10 +550,7 @@ async fn health_check(State(state): State<MgmtState>) -> Json<HealthResponse> {
 
     let healthy = statuses.iter().all(|s| s.healthy);
 
-    Json(HealthResponse {
-        healthy,
-        services,
-    })
+    Json(HealthResponse { healthy, services })
 }
 
 /// WebSocket handler for real-time updates
@@ -647,7 +668,10 @@ async fn handle_ws(mut socket: WebSocket, state: MgmtState) {
             });
 
             if let Some(chat) = goal_chat {
-                update.as_object_mut().unwrap().insert("goal_chat".to_string(), chat);
+                update
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("goal_chat".to_string(), chat);
             }
 
             update
@@ -662,12 +686,7 @@ async fn handle_ws(mut socket: WebSocket, state: MgmtState) {
         }
 
         // Check for client messages (subscribe, ping, close) with 2s timeout
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            socket.recv(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), socket.recv()).await {
             Ok(Some(Ok(Message::Text(text)))) => {
                 // Handle subscription commands from the client
                 if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -707,7 +726,8 @@ fn extract_ai_response(output: &str) -> String {
                     let result = inner.get("result").and_then(|v| v.as_str()).unwrap_or("");
                     return format!("{}\n\n{}", reasoning, result);
                 }
-                return serde_json::to_string_pretty(&inner).unwrap_or_else(|_| ai_resp.to_string());
+                return serde_json::to_string_pretty(&inner)
+                    .unwrap_or_else(|_| ai_resp.to_string());
             }
             return ai_resp.to_string();
         }

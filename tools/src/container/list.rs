@@ -42,12 +42,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         parsed
             .iter()
             .map(|c| ContainerInfo {
-                id: c["Id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(12)
-                    .collect(),
+                id: c["Id"].as_str().unwrap_or("").chars().take(12).collect(),
                 name: c["Names"]
                     .as_array()
                     .and_then(|a| a.first())

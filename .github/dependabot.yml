@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Rust (Cargo)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "rust"
+    reviewers:
+      - "MohaMehrzad"
+    open-pull-requests-limit: 10
+
+  # Python (pip)
+  - package-ecosystem: "pip"
+    directory: "/agent-core"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "python"
+    reviewers:
+      - "MohaMehrzad"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
+    reviewers:
+      - "MohaMehrzad"

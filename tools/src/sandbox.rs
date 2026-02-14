@@ -186,7 +186,10 @@ impl Sandbox {
         let result = tokio::time::timeout(self.limits.max_cpu_time, child.wait_with_output())
             .await
             .map_err(|_| {
-                warn!("Sandbox execution timed out after {:?}", self.limits.max_cpu_time);
+                warn!(
+                    "Sandbox execution timed out after {:?}",
+                    self.limits.max_cpu_time
+                );
                 anyhow::anyhow!("Execution timed out after {:?}", self.limits.max_cpu_time)
             })?
             .context("Failed to wait for sandboxed process")?;
@@ -204,12 +207,7 @@ impl Sandbox {
     /// Check if a tool should be sandboxed based on risk level
     pub fn should_sandbox(tool_name: &str) -> bool {
         // High-risk tools that modify system state
-        let sandboxed_prefixes = [
-            "process.spawn",
-            "pkg.install",
-            "pkg.remove",
-            "firewall.",
-        ];
+        let sandboxed_prefixes = ["process.spawn", "pkg.install", "pkg.remove", "firewall."];
 
         sandboxed_prefixes
             .iter()

@@ -201,7 +201,9 @@ fn matches_cron(expression: &str, now: &chrono::DateTime<chrono::Utc>) -> bool {
         (parts[4], now.weekday().num_days_from_monday() + 1),
     ];
 
-    checks.iter().all(|(pattern, value)| matches_field(pattern, *value))
+    checks
+        .iter()
+        .all(|(pattern, value)| matches_field(pattern, *value))
 }
 
 fn matches_field(pattern: &str, value: u32) -> bool {

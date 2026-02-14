@@ -58,9 +58,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         .context("Failed to self-sign CA cert")?;
 
     // Generate server cert
-    let mut server_params =
-        rcgen::CertificateParams::new(vec![req.service_name.clone()])
-            .context("Failed to create server params")?;
+    let mut server_params = rcgen::CertificateParams::new(vec![req.service_name.clone()])
+        .context("Failed to create server params")?;
     server_params.is_ca = rcgen::IsCa::NoCa;
     server_params.not_before = rcgen::date_time_ymd(2024, 1, 1);
     server_params.not_after = rcgen::date_time_ymd(2024 + req.validity_years, 12, 31);

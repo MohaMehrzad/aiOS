@@ -2,15 +2,15 @@
 //!
 //! Each submodule exposes `pub fn execute(input: &[u8]) -> Result<Vec<u8>>`.
 
-pub mod audit_query;
-pub mod check_perms;
-pub mod grant;
-pub mod revoke;
 pub mod audit;
-pub mod scan;
+pub mod audit_query;
 pub mod cert_generate;
 pub mod cert_rotate;
+pub mod check_perms;
 pub mod file_integrity;
+pub mod grant;
+pub mod revoke;
+pub mod scan;
 pub mod scan_rootkits;
 
 use crate::registry::{make_tool, Registry};

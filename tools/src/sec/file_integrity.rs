@@ -47,8 +47,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
 
     let db_path = "/var/lib/aios/data/file_integrity.db";
     std::fs::create_dir_all("/var/lib/aios/data").ok();
-    let conn =
-        rusqlite::Connection::open(db_path).context("Failed to open integrity database")?;
+    let conn = rusqlite::Connection::open(db_path).context("Failed to open integrity database")?;
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS file_checksums (

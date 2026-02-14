@@ -27,16 +27,19 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     let mut entries = Vec::new();
 
     for entry_result in read_dir {
-        let entry = entry_result
-            .with_context(|| format!("fs.list: error iterating directory {path}"))?;
+        let entry =
+            entry_result.with_context(|| format!("fs.list: error iterating directory {path}"))?;
 
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Use the DirEntry file_type (does not follow symlinks) to detect symlinks,
         // then use symlink_metadata for size so we report the link itself, not the target.
-        let ft = entry
-            .file_type()
-            .with_context(|| format!("fs.list: cannot get file type for {}", entry.path().display()))?;
+        let ft = entry.file_type().with_context(|| {
+            format!(
+                "fs.list: cannot get file type for {}",
+                entry.path().display()
+            )
+        })?;
 
         let metadata = fs::symlink_metadata(entry.path())
             .with_context(|| format!("fs.list: cannot stat {}", entry.path().display()))?;

@@ -107,9 +107,7 @@ fn get_memory_macos() -> Result<Output> {
 }
 
 fn get_page_size() -> u64 {
-    let output = Command::new("sysctl")
-        .args(["-n", "hw.pagesize"])
-        .output();
+    let output = Command::new("sysctl").args(["-n", "hw.pagesize"]).output();
 
     match output {
         Ok(out) => String::from_utf8_lossy(&out.stdout)
@@ -131,8 +129,8 @@ fn extract_vm_stat_value(line: &str, key: &str) -> Option<u64> {
 }
 
 fn get_memory_linux() -> Result<Output> {
-    let meminfo = std::fs::read_to_string("/proc/meminfo")
-        .context("Failed to read /proc/meminfo")?;
+    let meminfo =
+        std::fs::read_to_string("/proc/meminfo").context("Failed to read /proc/meminfo")?;
 
     let mut total_kb: u64 = 0;
     let mut available_kb: u64 = 0;

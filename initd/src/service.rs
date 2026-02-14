@@ -39,12 +39,7 @@ impl ServiceSupervisor {
     }
 
     /// Start a service and register it with the supervisor
-    pub fn start_service(
-        &mut self,
-        name: &str,
-        binary: &str,
-        args: &[&str],
-    ) -> Result<()> {
+    pub fn start_service(&mut self, name: &str, binary: &str, args: &[&str]) -> Result<()> {
         info!("Starting service: {name}");
         let child = Command::new(binary)
             .args(args)
@@ -156,14 +151,14 @@ impl ServiceSupervisor {
             return;
         }
 
-        info!("Restarting service {name} (attempt {})", service.restart_count + 1);
+        info!(
+            "Restarting service {name} (attempt {})",
+            service.restart_count + 1
+        );
         let binary = service.binary.clone();
         let args = service.args.clone();
 
-        match Command::new(&binary)
-            .args(&args)
-            .spawn()
-        {
+        match Command::new(&binary).args(&args).spawn() {
             Ok(child) => {
                 info!("Service {name} restarted with PID {}", child.id());
                 service.process = child;
@@ -202,10 +197,7 @@ impl ServiceSupervisor {
                 if remaining.is_zero() {
                     break;
                 }
-                match service
-                    .process
-                    .wait()
-                {
+                match service.process.wait() {
                     Ok(status) => info!("Service {name} exited: {status}"),
                     Err(e) => warn!("Error waiting for {name}: {e}"),
                 }

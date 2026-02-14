@@ -85,8 +85,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
 
     // Add body for write methods
     if !input.body.is_null() && matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
-        let body_str = serde_json::to_string(&input.body)
-            .context("Failed to serialize request body")?;
+        let body_str =
+            serde_json::to_string(&input.body).context("Failed to serialize request body")?;
         args.push("-H".to_string());
         args.push("Content-Type: application/json".to_string());
         args.push("-d".to_string());
@@ -113,8 +113,8 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     };
 
     // Try to parse response as JSON
-    let data = serde_json::from_str::<serde_json::Value>(body.trim())
-        .unwrap_or(serde_json::Value::Null);
+    let data =
+        serde_json::from_str::<serde_json::Value>(body.trim()).unwrap_or(serde_json::Value::Null);
 
     let result = Output {
         status,

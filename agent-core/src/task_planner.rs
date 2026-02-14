@@ -74,17 +74,11 @@ impl TaskPlanner {
     ///
     /// For simple goals, uses heuristic decomposition.
     /// For Tactical/Strategic goals, uses AI-powered multi-step decomposition.
-    pub async fn decompose_goal(
-        &mut self,
-        goal_id: &str,
-        description: &str,
-    ) -> Result<Vec<Task>> {
+    pub async fn decompose_goal(&mut self, goal_id: &str, description: &str) -> Result<Vec<Task>> {
         let level = self.classify_complexity(description);
 
         let tasks = match level {
-            IntelligenceLevel::Reactive => {
-                self.heuristic_decompose(goal_id, description).await?
-            }
+            IntelligenceLevel::Reactive => self.heuristic_decompose(goal_id, description).await?,
             IntelligenceLevel::Operational => {
                 self.single_task_decompose(goal_id, description, &level)
                     .await?
@@ -160,7 +154,9 @@ impl TaskPlanner {
 
         // If analysis produced nothing, fall back to single task
         if tasks.is_empty() {
-            return self.single_task_decompose(goal_id, description, level).await;
+            return self
+                .single_task_decompose(goal_id, description, level)
+                .await;
         }
 
         Ok(tasks)
@@ -213,10 +209,7 @@ impl TaskPlanner {
                 format!("Check prerequisites for: {description}"),
                 vec!["pkg".to_string(), "fs".to_string()],
             ));
-            steps.push((
-                format!("Install: {description}"),
-                vec!["pkg".to_string()],
-            ));
+            steps.push((format!("Install: {description}"), vec!["pkg".to_string()]));
             steps.push((
                 "Verify installation and configure".to_string(),
                 vec!["service".to_string(), "fs".to_string()],
@@ -266,8 +259,13 @@ impl TaskPlanner {
         }
 
         // Reactive: explicit tool call in description (e.g. "call monitor.cpu")
-        if desc_lower.contains("call ") || desc_lower.contains("execute ") || desc_lower.contains("run ") {
-            let tool_patterns = ["fs.", "process.", "service.", "net.", "monitor.", "email.", "pkg.", "sec."];
+        if desc_lower.contains("call ")
+            || desc_lower.contains("execute ")
+            || desc_lower.contains("run ")
+        {
+            let tool_patterns = [
+                "fs.", "process.", "service.", "net.", "monitor.", "email.", "pkg.", "sec.",
+            ];
             if tool_patterns.iter().any(|p| desc_lower.contains(p)) {
                 return IntelligenceLevel::Reactive;
             }
@@ -297,11 +295,7 @@ impl TaskPlanner {
     }
 
     /// Simple heuristic decomposition for reactive tasks
-    async fn heuristic_decompose(
-        &self,
-        goal_id: &str,
-        description: &str,
-    ) -> Result<Vec<Task>> {
+    async fn heuristic_decompose(&self, goal_id: &str, description: &str) -> Result<Vec<Task>> {
         let now = chrono::Utc::now().timestamp();
         let tools = self.infer_required_tools(description);
         let task = Task {
@@ -403,9 +397,7 @@ impl TaskPlanner {
         {
             tools.push("sec".to_string());
         }
-        if desc_lower.contains("plugin")
-            || desc_lower.contains("script")
-        {
+        if desc_lower.contains("plugin") || desc_lower.contains("script") {
             tools.push("plugin".to_string());
         }
         if desc_lower.contains("email")
@@ -512,8 +504,17 @@ impl TaskPlanner {
 /// Extract a service name from a goal description
 fn extract_service_name(desc: &str) -> String {
     let known_services = [
-        "nginx", "apache", "postgres", "mysql", "redis", "docker",
-        "ssh", "systemd", "cron", "mongodb", "elasticsearch",
+        "nginx",
+        "apache",
+        "postgres",
+        "mysql",
+        "redis",
+        "docker",
+        "ssh",
+        "systemd",
+        "cron",
+        "mongodb",
+        "elasticsearch",
     ];
     for svc in &known_services {
         if desc.contains(svc) {

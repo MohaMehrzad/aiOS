@@ -65,7 +65,13 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     } else {
         // On Linux, use systemctl
         let output = Command::new("systemctl")
-            .args(["list-units", "--type=service", "--all", "--no-pager", "--no-legend"])
+            .args([
+                "list-units",
+                "--type=service",
+                "--all",
+                "--no-pager",
+                "--no-legend",
+            ])
             .output()
             .context("Failed to execute systemctl")?;
 

@@ -35,9 +35,7 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
     if let Some(parent) = Path::new(destination).parent() {
         if !parent.exists() {
             fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "fs.move: cannot create parent dirs for destination {destination}"
-                )
+                format!("fs.move: cannot create parent dirs for destination {destination}")
             })?;
         }
     }
@@ -48,10 +46,9 @@ pub fn execute(input: &[u8]) -> Result<Vec<u8>> {
         Err(_rename_err) => {
             // Fallback: copy then delete (handles cross-device moves)
             if Path::new(source).is_dir() {
-                copy_dir_recursive(Path::new(source), Path::new(destination))
-                    .with_context(|| {
-                        format!("fs.move: failed to copy directory {source} -> {destination}")
-                    })?;
+                copy_dir_recursive(Path::new(source), Path::new(destination)).with_context(
+                    || format!("fs.move: failed to copy directory {source} -> {destination}"),
+                )?;
                 fs::remove_dir_all(source).with_context(|| {
                     format!("fs.move: copied but failed to remove original directory {source}")
                 })?;

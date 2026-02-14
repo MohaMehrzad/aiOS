@@ -12,24 +12,24 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tracing::{debug, error, info, warn};
 
-mod goal_engine;
-mod task_planner;
 mod agent_router;
-mod result_aggregator;
-mod decision_logger;
-mod management;
-mod health;
-mod clients;
-mod autonomy;
-mod context;
 mod agent_spawner;
-mod tls;
-mod discovery;
-mod proactive;
-mod scheduler;
-mod event_bus;
+mod autonomy;
+mod clients;
 mod cluster;
+mod context;
+mod decision_logger;
+mod discovery;
+mod event_bus;
+mod goal_engine;
+mod health;
+mod management;
+mod proactive;
 mod remote_exec;
+mod result_aggregator;
+mod scheduler;
+mod task_planner;
+mod tls;
 
 pub mod proto {
     pub mod common {
@@ -274,7 +274,9 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
     ) -> Result<tonic::Response<proto::common::Status>, tonic::Status> {
         let hb = request.into_inner();
         let mut state = self.state.write().await;
-        state.agent_router.update_heartbeat(&hb.agent_id, &hb.status);
+        state
+            .agent_router
+            .update_heartbeat(&hb.agent_id, &hb.status);
 
         Ok(tonic::Response::new(proto::common::Status {
             success: true,
@@ -331,9 +333,12 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         if let Some(ref goal_id) = goal_id {
             // Find the agent that completed this task and release it
             for agent in state.agent_router.list_agents().await {
-                if let Some(ref assigned) = state.agent_router.get_assigned_task_id(&agent.agent_id) {
+                if let Some(ref assigned) = state.agent_router.get_assigned_task_id(&agent.agent_id)
+                {
                     if assigned == &task_id {
-                        state.agent_router.task_completed(&agent.agent_id, result.success);
+                        state
+                            .agent_router
+                            .task_completed(&agent.agent_id, result.success);
                         break;
                     }
                 }
@@ -427,7 +432,9 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
 
         info!(
             "Creating schedule {}: {} → {}",
-            schedule_id, req.cron_expr, &req.goal_template[..60.min(req.goal_template.len())]
+            schedule_id,
+            req.cron_expr,
+            &req.goal_template[..60.min(req.goal_template.len())]
         );
 
         Ok(tonic::Response::new(
@@ -443,9 +450,7 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         _request: tonic::Request<proto::common::Empty>,
     ) -> Result<tonic::Response<proto::orchestrator::ScheduleListResponse>, tonic::Status> {
         Ok(tonic::Response::new(
-            proto::orchestrator::ScheduleListResponse {
-                schedules: vec![],
-            },
+            proto::orchestrator::ScheduleListResponse { schedules: vec![] },
         ))
     }
 
@@ -501,7 +506,12 @@ impl proto::orchestrator::orchestrator_server::Orchestrator for OrchestratorServ
         let req = request.into_inner();
         let state = self.state.read().await;
         let mut cm = state.cluster.write().await;
-        cm.node_heartbeat(&req.node_id, req.cpu_usage, req.memory_usage, req.active_tasks);
+        cm.node_heartbeat(
+            &req.node_id,
+            req.cpu_usage,
+            req.memory_usage,
+            req.active_tasks,
+        );
 
         Ok(tonic::Response::new(proto::common::Status {
             success: true,
@@ -602,7 +612,9 @@ async fn main() -> Result<()> {
     let mut goal_eng = match goal_engine::GoalEngine::with_db(db_path) {
         Ok(engine) => engine,
         Err(e) => {
-            tracing::warn!("Failed to open goals database at {db_path}: {e}, falling back to in-memory");
+            tracing::warn!(
+                "Failed to open goals database at {db_path}: {e}, falling back to in-memory"
+            );
             goal_engine::GoalEngine::new()
         }
     };
@@ -650,7 +662,9 @@ async fn main() -> Result<()> {
     });
 
     // Start agent spawner — spawn Python agent child processes
-    let spawner = Arc::new(RwLock::new(agent_spawner::AgentSpawner::new("/etc/aios/agents")));
+    let spawner = Arc::new(RwLock::new(agent_spawner::AgentSpawner::new(
+        "/etc/aios/agents",
+    )));
     {
         let mut s = spawner.write().await;
         match s.load_configs() {

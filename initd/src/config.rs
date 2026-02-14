@@ -293,60 +293,158 @@ impl Default for MonitoringConfig {
 }
 
 // Default value functions
-fn default_hostname() -> String { "aios".into() }
-fn default_log_level() -> String { "info".into() }
-fn default_log_file() -> String { "/var/log/aios/system.log".into() }
-fn default_autonomy_level() -> String { "full".into() }
-fn default_init_timeout() -> u64 { 300 }
-fn default_clean_shutdown_flag() -> String { "/var/lib/aios/clean_shutdown".into() }
-fn default_runtime() -> String { "llama-cpp".into() }
-fn default_model_dir() -> String { "/var/lib/aios/models".into() }
-fn default_llama_server_binary() -> String { "/usr/bin/llama-server".into() }
-fn default_true() -> bool { true }
-fn default_context_length() -> u32 { 2048 }
-fn default_threads() -> u32 { 2 }
-fn default_gpu_layers() -> i32 { -1 }
-fn default_max_tokens() -> u32 { 512 }
-fn default_temperature() -> f32 { 0.1 }
-fn default_idle_timeout() -> u64 { 5 }
-fn default_api_max_tokens() -> u32 { 4096 }
-fn default_api_temperature() -> f32 { 0.3 }
-fn default_monthly_budget() -> f64 { 100.0 }
-fn default_rate_limit() -> u32 { 50 }
-fn default_api_timeout() -> u64 { 30 }
-fn default_cache_max() -> u32 { 1000 }
-fn default_cache_ttl() -> u32 { 1 }
-fn default_doc_ttl() -> u32 { 24 }
-fn default_op_max() -> u32 { 10000 }
-fn default_working_db() -> String { "/var/lib/aios/memory/working.db".into() }
-fn default_longterm_db() -> String { "/var/lib/aios/memory/longterm.db".into() }
-fn default_vector_dir() -> String { "/var/lib/aios/vectors".into() }
-fn default_retention() -> u32 { 30 }
-fn default_vacuum() -> u32 { 7 }
-fn default_context_tokens() -> u32 { 4000 }
-fn default_capability_mode() -> String { "strict".into() }
-fn default_audit_db() -> String { "/var/lib/aios/ledger/audit.db".into() }
-fn default_secrets_file() -> String { "/etc/aios/secrets.enc".into() }
-fn default_mgmt_port() -> u16 { 9090 }
-fn default_mgmt_subnet() -> String { "0.0.0.0/0".into() }
-fn default_dhcp_timeout() -> u32 { 30 }
-fn default_dns_servers() -> Vec<String> { vec!["1.1.1.1".into(), "8.8.8.8".into()] }
-fn default_firewall_policy() -> String { "deny".into() }
-fn default_agent_config_dir() -> String { "/etc/aios/agents".into() }
-fn default_prompts_dir() -> String { "/etc/aios/agents/prompts".into() }
-fn default_max_instances() -> u32 { 3 }
-fn default_heartbeat_timeout() -> u64 { 15 }
-fn default_max_restarts() -> u32 { 5 }
-fn default_restart_window() -> u64 { 300 }
-fn default_health_interval() -> u64 { 30 }
-fn default_metric_interval() -> u64 { 10 }
-fn default_log_max_size() -> u64 { 100 }
-fn default_log_keep() -> u32 { 10 }
+fn default_hostname() -> String {
+    "aios".into()
+}
+fn default_log_level() -> String {
+    "info".into()
+}
+fn default_log_file() -> String {
+    "/var/log/aios/system.log".into()
+}
+fn default_autonomy_level() -> String {
+    "full".into()
+}
+fn default_init_timeout() -> u64 {
+    300
+}
+fn default_clean_shutdown_flag() -> String {
+    "/var/lib/aios/clean_shutdown".into()
+}
+fn default_runtime() -> String {
+    "llama-cpp".into()
+}
+fn default_model_dir() -> String {
+    "/var/lib/aios/models".into()
+}
+fn default_llama_server_binary() -> String {
+    "/usr/bin/llama-server".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_context_length() -> u32 {
+    2048
+}
+fn default_threads() -> u32 {
+    2
+}
+fn default_gpu_layers() -> i32 {
+    -1
+}
+fn default_max_tokens() -> u32 {
+    512
+}
+fn default_temperature() -> f32 {
+    0.1
+}
+fn default_idle_timeout() -> u64 {
+    5
+}
+fn default_api_max_tokens() -> u32 {
+    4096
+}
+fn default_api_temperature() -> f32 {
+    0.3
+}
+fn default_monthly_budget() -> f64 {
+    100.0
+}
+fn default_rate_limit() -> u32 {
+    50
+}
+fn default_api_timeout() -> u64 {
+    30
+}
+fn default_cache_max() -> u32 {
+    1000
+}
+fn default_cache_ttl() -> u32 {
+    1
+}
+fn default_doc_ttl() -> u32 {
+    24
+}
+fn default_op_max() -> u32 {
+    10000
+}
+fn default_working_db() -> String {
+    "/var/lib/aios/memory/working.db".into()
+}
+fn default_longterm_db() -> String {
+    "/var/lib/aios/memory/longterm.db".into()
+}
+fn default_vector_dir() -> String {
+    "/var/lib/aios/vectors".into()
+}
+fn default_retention() -> u32 {
+    30
+}
+fn default_vacuum() -> u32 {
+    7
+}
+fn default_context_tokens() -> u32 {
+    4000
+}
+fn default_capability_mode() -> String {
+    "strict".into()
+}
+fn default_audit_db() -> String {
+    "/var/lib/aios/ledger/audit.db".into()
+}
+fn default_secrets_file() -> String {
+    "/etc/aios/secrets.enc".into()
+}
+fn default_mgmt_port() -> u16 {
+    9090
+}
+fn default_mgmt_subnet() -> String {
+    "0.0.0.0/0".into()
+}
+fn default_dhcp_timeout() -> u32 {
+    30
+}
+fn default_dns_servers() -> Vec<String> {
+    vec!["1.1.1.1".into(), "8.8.8.8".into()]
+}
+fn default_firewall_policy() -> String {
+    "deny".into()
+}
+fn default_agent_config_dir() -> String {
+    "/etc/aios/agents".into()
+}
+fn default_prompts_dir() -> String {
+    "/etc/aios/agents/prompts".into()
+}
+fn default_max_instances() -> u32 {
+    3
+}
+fn default_heartbeat_timeout() -> u64 {
+    15
+}
+fn default_max_restarts() -> u32 {
+    5
+}
+fn default_restart_window() -> u64 {
+    300
+}
+fn default_health_interval() -> u64 {
+    30
+}
+fn default_metric_interval() -> u64 {
+    10
+}
+fn default_log_max_size() -> u64 {
+    100
+}
+fn default_log_keep() -> u32 {
+    10
+}
 
 /// Load configuration from /etc/aios/config.toml
 pub fn load_config() -> Result<AiosConfig> {
-    let config_path = std::env::var("AIOS_CONFIG")
-        .unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+    let config_path =
+        std::env::var("AIOS_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
 
     if Path::new(&config_path).exists() {
         let content = fs::read_to_string(&config_path)

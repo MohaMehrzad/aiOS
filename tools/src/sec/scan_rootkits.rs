@@ -110,7 +110,12 @@ fn check_suspicious_modules() -> RootkitFinding {
         .map(|l| l.to_string())
         .collect();
 
-    let severity = if details.is_empty() { "low" } else { "critical" }.to_string();
+    let severity = if details.is_empty() {
+        "low"
+    } else {
+        "critical"
+    }
+    .to_string();
     RootkitFinding {
         check: "suspicious_modules".into(),
         severity,

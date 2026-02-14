@@ -79,7 +79,12 @@ fn run() -> Result<()> {
         (
             "aios-orchestrator",
             "/usr/sbin/aios-orchestrator",
-            &["aios-runtime", "aios-memory", "aios-tools", "aios-api-gateway"],
+            &[
+                "aios-runtime",
+                "aios-memory",
+                "aios-tools",
+                "aios-api-gateway",
+            ],
         ),
     ];
 
@@ -378,8 +383,7 @@ fn run_first_boot() -> Result<()> {
             "/etc/aios/keys",
         ];
         for dir in &dirs {
-            fs::create_dir_all(dir)
-                .with_context(|| format!("Failed to create directory {dir}"))?;
+            fs::create_dir_all(dir).with_context(|| format!("Failed to create directory {dir}"))?;
         }
         info!("Created aiOS directory structure");
     }
