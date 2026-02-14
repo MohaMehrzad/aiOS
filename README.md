@@ -3,7 +3,7 @@
 [![CI](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/ci.yml)
 [![Security Audit](https://github.com/MohaMehrzad/aiOS/actions/workflows/audit.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/audit.yml)
 [![CodeQL](https://github.com/MohaMehrzad/aiOS/actions/workflows/codeql.yml/badge.svg)](https://github.com/MohaMehrzad/aiOS/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/License-PolyForm_Noncommercial-orange.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg)](https://www.python.org/)
 [![GitHub Discussions](https://img.shields.io/github/discussions/MohaMehrzad/aiOS)](https://github.com/MohaMehrzad/aiOS/discussions)
@@ -209,4 +209,6 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 
 ## License
 
-This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+This project is source-available under the PolyForm Noncommercial 1.0.0 license — see [LICENSE](LICENSE) for details.
+
+Commercial use requires a separate paid commercial license/subscription — see [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
