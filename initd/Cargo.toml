@@ -9,7 +9,7 @@ name = "aios-init"
 path = "src/main.rs"
 
 [dependencies]
-nix = { version = "0.29", features = ["mount", "signal", "process", "fs", "hostname"] }
+nix = { version = "0.31", features = ["mount", "signal", "process", "fs", "hostname"] }
 toml = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
