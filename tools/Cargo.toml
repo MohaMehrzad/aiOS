@@ -22,7 +22,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 rusqlite = { workspace = true }
-jsonschema = "0.26"
+jsonschema = "0.42"
 sha2 = "0.10"
 walkdir = "2"
 nix = { version = "0.29", features = ["fs", "process", "signal", "user"] }
