@@ -28,7 +28,7 @@ walkdir = "2"
 nix = { version = "0.29", features = ["fs", "process", "signal", "user"] }
 libc = "0.2"
 toml = { workspace = true }
-rcgen = "0.13"
+rcgen = "0.14"
 notify = "6.1"
 tokio-util = { workspace = true }
 lettre = "0.11"
