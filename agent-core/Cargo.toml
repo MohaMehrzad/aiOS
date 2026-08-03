@@ -23,7 +23,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
-petgraph = "0.6"
+petgraph = "0.7"
 priority-queue = "2"
 dashmap = "6"
 tokio-util = { workspace = true }
